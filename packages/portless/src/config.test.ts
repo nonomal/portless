@@ -63,6 +63,22 @@ describe("splitCommand", () => {
   it("handles quotes within a token", () => {
     expect(splitCommand("--flag='some value'")).toEqual(["--flag=some value"]);
   });
+
+  it("handles backslash-escaped double quotes", () => {
+    expect(splitCommand('echo \\"hello\\"')).toEqual(["echo", '"hello"']);
+  });
+
+  it("handles backslash-escaped single quotes", () => {
+    expect(splitCommand("echo \\'hello\\'")).toEqual(["echo", "'hello'"]);
+  });
+
+  it("handles escaped backslash", () => {
+    expect(splitCommand("echo \\\\path")).toEqual(["echo", "\\path"]);
+  });
+
+  it("handles backslash-escaped spaces", () => {
+    expect(splitCommand("path\\ with\\ spaces arg")).toEqual(["path with spaces", "arg"]);
+  });
 });
 
 describe("loadConfig", () => {
@@ -100,6 +116,15 @@ describe("loadConfig", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify(config));
     const result = loadConfig(tmpDir);
     expect(result!.config).toEqual(config);
+  });
+
+  it("loads config with proxy field", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "portless.json"),
+      JSON.stringify({ name: "myapp", proxy: false })
+    );
+    const result = loadConfig(tmpDir);
+    expect(result!.config.proxy).toBe(false);
   });
 
   it("loads config with apps map", () => {
@@ -257,13 +282,38 @@ describe("loadConfig validation", () => {
     expect(() => loadConfig(tmpDir)).toThrow("process.exit");
     mockExit.mockRestore();
   });
+
+  it("exits when proxy is not a boolean", () => {
+    fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ proxy: "false" }));
+    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("process.exit");
+    });
+    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
+    mockExit.mockRestore();
+  });
 });
 
 describe("resolveAppConfig", () => {
   it("returns top-level fields when no apps key", () => {
     const config = { name: "myapp", script: "dev" };
     const result = resolveAppConfig(config, "/repo", "/repo");
-    expect(result).toEqual({ name: "myapp", script: "dev" });
+    expect(result).toEqual({ name: "myapp", script: "dev", appPort: undefined, proxy: undefined });
+  });
+
+  it("returns proxy field from top-level config", () => {
+    const config = { name: "myapp", proxy: false };
+    const result = resolveAppConfig(config, "/repo", "/repo");
+    expect(result.proxy).toBe(false);
+  });
+
+  it("returns proxy field from apps entry", () => {
+    const config = {
+      apps: {
+        "apps/gen": { name: "gen", proxy: false },
+      },
+    };
+    const result = resolveAppConfig(config, "/repo", "/repo/apps/gen");
+    expect(result.proxy).toBe(false);
   });
 
   it("matches exact path in apps map", () => {

@@ -54,6 +54,12 @@ Without a `portless.json`, the name is inferred from `package.json` and the scri
       <td>Fixed port for the child process.</td>
     </tr>
     <tr>
+      <td>`proxy`</td>
+      <td>boolean</td>
+      <td>auto</td>
+      <td>Whether to route through the proxy. Auto-detected from the command; set `false` for non-server scripts.</td>
+    </tr>
+    <tr>
       <td>`apps`</td>
       <td>object</td>
       <td></td>
@@ -62,7 +68,7 @@ Without a `portless.json`, the name is inferred from `package.json` and the scri
   </tbody>
 </table>
 
-Each `apps` entry has the same shape (`name`, `script`, `appPort`). When `apps` is present, top-level fields apply only in single-app mode.
+Each `apps` entry has the same shape (`name`, `script`, `appPort`, `proxy`). When `apps` is present, top-level fields apply only in single-app mode.
 
 ### Monorepo
 
@@ -87,11 +93,13 @@ The `apps` map is optional and only needed for overrides. Packages not listed st
 
 ### Precedence
 
-For `name`: CLI `--name` flag > `portless.json` > `package.json` inference.
+Closest config wins, like Prettier and ESLint:
 
-For `script`: CLI `--script` flag > `portless.json` > default `"dev"`.
+For `name`: CLI `--name` flag > `package.json` `"portless"` key > `portless.json` app entry > `package.json` inference.
 
-For `appPort`: CLI `--app-port` flag > `PORTLESS_APP_PORT` env var > `portless.json` > auto-assigned.
+For `script`: CLI `--script` flag > `package.json` `"portless"` key > `portless.json` app entry > default `"dev"`.
+
+For `appPort`: CLI `--app-port` flag > `PORTLESS_APP_PORT` env var > `package.json` `"portless"` key > `portless.json` app entry > auto-assigned.
 
 ## Environment variables
 

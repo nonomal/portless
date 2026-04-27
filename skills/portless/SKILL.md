@@ -255,18 +255,19 @@ LAN mode depends on the system mDNS helpers that portless launches: macOS includ
 
 ## portless.json
 
-Optional config file. Portless walks up from cwd to find it.
+Optional config file. Portless looks for it in the current directory.
 
-| Field     | Type   | Default                    | Description                                              |
-| --------- | ------ | -------------------------- | -------------------------------------------------------- |
-| `name`    | string | inferred from package.json | Base app name (worktree prefix still applies)            |
-| `script`  | string | `"dev"`                    | Name of a package.json script to run                     |
-| `appPort` | number | auto-assigned              | Fixed port for the child process                         |
-| `apps`    | object |                            | Overrides for workspace packages, keyed by relative path |
+| Field     | Type    | Default                    | Description                                              |
+| --------- | ------- | -------------------------- | -------------------------------------------------------- |
+| `name`    | string  | inferred from package.json | Base app name (worktree prefix still applies)            |
+| `script`  | string  | `"dev"`                    | Name of a package.json script to run                     |
+| `appPort` | number  | auto-assigned              | Fixed port for the child process                         |
+| `proxy`   | boolean | auto-detected              | Whether to route through the proxy (`false` for tasks)   |
+| `apps`    | object  |                            | Overrides for workspace packages, keyed by relative path |
 
-Each `apps` entry has the same shape (`name`, `script`, `appPort`). When `apps` is present, top-level fields apply only in single-app mode.
+Each `apps` entry has the same shape (`name`, `script`, `appPort`, `proxy`). When `apps` is present, top-level fields apply only in single-app mode.
 
-Precedence: CLI flags > portless.json > package.json inference > defaults.
+Precedence (closest wins): CLI flags > package.json `"portless"` key > portless.json app entry > defaults.
 
 ## Troubleshooting
 

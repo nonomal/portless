@@ -922,10 +922,11 @@ async function ensureProxyRunning(
       console.error(colors.gray(`Logs: ${logPath}`));
     }
     process.exit(1);
+    return { started: false }; // unreachable; helps TypeScript narrow `discovered`
   }
 
   console.log(colors.green("Proxy started in background"));
-  return { started: true, state: discovered! };
+  return { started: true, state: discovered };
 }
 
 async function runApp(
@@ -2389,7 +2390,7 @@ async function handleDefaultMode(globalScript?: string): Promise<boolean> {
 
   const scriptName = globalScript ?? appConfig?.script ?? "dev";
   if (hasScript(scriptName, cwd)) {
-    await handleDefaultSingle(cwd, scriptName);
+    await handleDefaultSingle(cwd, scriptName, appConfig);
     return true;
   }
 
@@ -2399,9 +2400,11 @@ async function handleDefaultMode(globalScript?: string): Promise<boolean> {
 /**
  * Single-app mode: run one package through the proxy.
  */
-async function handleDefaultSingle(cwd: string, scriptName: string): Promise<void> {
-  const appConfig = loadAppConfig(cwd);
-
+async function handleDefaultSingle(
+  cwd: string,
+  scriptName: string,
+  appConfig: AppConfig | null
+): Promise<void> {
   const resolved = resolveScript(scriptName, cwd);
   if (!resolved) {
     console.error(colors.red(`Error: No "${scriptName}" script found in package.json.`));
@@ -2623,10 +2626,10 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     const rootOverride = loaded ? resolveAppConfig(loaded.config, loaded.configDir, pkg.dir) : null;
     const pkgConfig = loadPackagePortlessConfig(pkg.dir);
 
-    // Merge: root apps map > package.json "portless" key > defaults
+    // Merge (closest wins): package.json "portless" > portless.json app entry > defaults
     const appOverride: AppConfig = {
-      ...pkgConfig,
       ...Object.fromEntries(Object.entries(rootOverride ?? {}).filter(([, v]) => v !== undefined)),
+      ...Object.fromEntries(Object.entries(pkgConfig ?? {}).filter(([, v]) => v !== undefined)),
     };
 
     const effectiveScript = appOverride.script ?? scriptName;
@@ -2635,7 +2638,7 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     const resolved = resolveScript(effectiveScript, pkg.dir);
     if (!resolved) continue;
 
-    const proxied = isServerCommand(resolved);
+    const proxied = appOverride.proxy ?? isServerCommand(resolved);
 
     let name: string;
     if (appOverride.name) {
@@ -2682,6 +2685,8 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
 
   const children: ReturnType<typeof spawn>[] = [];
 
+  // Sequential: each spawnProxiedApp calls findFreePort() which binds/releases
+  // a port, so parallel spawning could cause port collisions.
   for (const app of proxiedApps) {
     children.push(await spawnProxiedApp(app, dir, port, tls, tld));
   }

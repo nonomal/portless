@@ -83,12 +83,13 @@ The `apps` map is optional and only needed for name overrides. Packages not list
 
 ### Config fields
 
-| Field     | Type   | Default  | Description                                               |
-| --------- | ------ | -------- | --------------------------------------------------------- |
-| `name`    | string | inferred | Base app name. Worktree prefix still applies.             |
-| `script`  | string | `"dev"`  | Name of a `package.json` script to run.                   |
-| `appPort` | number | auto     | Fixed port for the child process.                         |
-| `apps`    | object |          | Overrides for workspace packages, keyed by relative path. |
+| Field     | Type    | Default  | Description                                               |
+| --------- | ------- | -------- | --------------------------------------------------------- |
+| `name`    | string  | inferred | Base app name. Worktree prefix still applies.             |
+| `script`  | string  | `"dev"`  | Name of a `package.json` script to run.                   |
+| `appPort` | number  | auto     | Fixed port for the child process.                         |
+| `proxy`   | boolean | auto     | Whether to route through the proxy. Auto-detected.        |
+| `apps`    | object  |          | Overrides for workspace packages, keyed by relative path. |
 
 ### --script flag
 

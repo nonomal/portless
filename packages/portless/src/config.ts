@@ -6,6 +6,7 @@ export interface AppConfig {
   name?: string;
   script?: string;
   appPort?: number;
+  proxy?: boolean;
 }
 
 export interface PortlessConfig extends AppConfig {
@@ -118,8 +119,7 @@ export function resolveAppConfig(
     }
     return {};
   }
-  const { apps: _, ...topLevel } = config;
-  return topLevel;
+  return { name: config.name, script: config.script, appPort: config.appPort, proxy: config.proxy };
 }
 
 /**
@@ -155,13 +155,23 @@ export function hasScript(scriptName: string, dir: string): boolean {
   }
 }
 
-/** Split a command string on whitespace, respecting single and double quotes. */
+/** Split a command string on whitespace, respecting quotes and backslash escapes. */
 export function splitCommand(command: string): string[] {
   const args: string[] = [];
   let current = "";
   let inSingle = false;
   let inDouble = false;
+  let escaped = false;
   for (const ch of command) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
     if (ch === "'" && !inDouble) {
       inSingle = !inSingle;
     } else if (ch === '"' && !inSingle) {
@@ -199,6 +209,10 @@ const BUILD_ONLY_COMMANDS = new Set([
 /**
  * Returns true if the command looks like it starts an HTTP server
  * (and should be proxied), false if it's a known build-only tool.
+ *
+ * Uses a denylist: unknown commands are assumed to be servers. This is
+ * intentionally permissive so we proxy by default rather than silently
+ * skipping a real server. Use `proxy: false` in config to override.
  */
 export function isServerCommand(args: string[]): boolean {
   if (args.length === 0) return false;
@@ -251,6 +265,13 @@ function validateConfig(config: unknown, configPath: string): asserts config is 
     }
   }
 
+  if (obj.proxy !== undefined) {
+    if (typeof obj.proxy !== "boolean") {
+      console.error(colors.red(`Error: "proxy" in ${configPath} must be a boolean.`));
+      process.exit(1);
+    }
+  }
+
   if (obj.apps !== undefined) {
     if (typeof obj.apps !== "object" || obj.apps === null || Array.isArray(obj.apps)) {
       console.error(colors.red(`Error: "apps" in ${configPath} must be an object.`));
@@ -295,6 +316,12 @@ function validateAppConfig(obj: Record<string, unknown>, prefix: string, configP
           `Error: "${prefix}.appPort" in ${configPath} must be an integer between 1 and 65535.`
         )
       );
+      process.exit(1);
+    }
+  }
+  if (obj.proxy !== undefined) {
+    if (typeof obj.proxy !== "boolean") {
+      console.error(colors.red(`Error: "${prefix}.proxy" in ${configPath} must be a boolean.`));
       process.exit(1);
     }
   }
