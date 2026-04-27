@@ -971,7 +971,7 @@ export function untrustCA(stateDir: string): { removed: boolean; error?: string 
 function untrustCAMacOS(caCertPath: string): { removed: boolean; error?: string } {
   const errors: string[] = [];
 
-  const tryExec = (args: string[]) => {
+  const tryExec = (args: string[]): boolean => {
     try {
       execFileSync("security", args, { stdio: "pipe", timeout: MACOS_SECURITY_ROOT_TIMEOUT_MS });
       return true;
@@ -982,15 +982,17 @@ function untrustCAMacOS(caCertPath: string): { removed: boolean; error?: string 
     }
   };
 
-  if (tryExec(["remove-trusted-cert", caCertPath])) {
-    return isCATrustedMacOSAfterAttempt(caCertPath)
-      ? { removed: false, error: errors.join("; ") || "Trust entry may still be present" }
-      : { removed: true };
-  }
+  tryExec(["remove-trusted-cert", caCertPath]);
 
-  const login = loginKeychainPath();
-  tryExec(["delete-certificate", "-c", CA_COMMON_NAME, login]);
-  tryExec(["delete-certificate", "-c", CA_COMMON_NAME, "/Library/Keychains/System.keychain"]);
+  // delete-certificate -c fails when multiple certs share the same CN
+  // ("is ambiguous, matches more than one certificate"). Loop until all
+  // matching certs are removed from each keychain.
+  const keychains = [loginKeychainPath(), "/Library/Keychains/System.keychain"];
+  for (const kc of keychains) {
+    for (let i = 0; i < 20; i++) {
+      if (!tryExec(["delete-certificate", "-c", CA_COMMON_NAME, kc])) break;
+    }
+  }
 
   return isCATrustedMacOSAfterAttempt(caCertPath)
     ? { removed: false, error: errors.join("; ") || "Could not remove CA from keychain (try sudo)" }
