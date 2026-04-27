@@ -76,6 +76,14 @@ import {
 import type { AppConfig } from "./config.js";
 import { findWorkspaceRoot, discoverWorkspacePackages } from "./workspace.js";
 import type { WorkspacePackage } from "./workspace.js";
+import {
+  ensureEnvLoader,
+  writeManifest,
+  removeManifest,
+  buildNodeOptions,
+  hasTurboConfig,
+} from "./turbo.js";
+import type { ManifestEntry } from "./turbo.js";
 
 const chalk = colors;
 
@@ -2718,6 +2726,150 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     }
   }
 
+  const useTurbo = loaded?.config.turbo !== false && hasTurboConfig(wsRoot);
+
+  if (useTurbo) {
+    await runWithTurbo(wsRoot, dir, port, tls, tld, scriptName, proxiedApps, taskApps);
+  } else {
+    await runWithDirectSpawn(dir, port, tls, tld, proxiedApps, taskApps);
+  }
+}
+
+async function runWithTurbo(
+  wsRoot: string,
+  stateDir: string,
+  proxyPort: number,
+  tls: boolean,
+  tld: string,
+  scriptName: string,
+  proxiedApps: MultiAppEntry[],
+  taskApps: MultiAppEntry[]
+): Promise<void> {
+  const store = new RouteStore(stateDir, {
+    onWarning: (msg: string) => console.warn(colors.yellow(msg)),
+  });
+
+  const manifest: Record<string, ManifestEntry> = {};
+  const routes: { hostname: string }[] = [];
+  const appUrls: { name: string; url: string }[] = [];
+
+  for (const app of proxiedApps) {
+    const usesPortless = app.commandArgs[0] === "portless";
+    if (usesPortless) {
+      appUrls.push({ name: app.name, url: "(managed by portless)" });
+      continue;
+    }
+
+    const appPort = app.appPort ?? (await findFreePort());
+    const protocol = tls ? "https" : "http";
+    const portSuffix =
+      (tls && proxyPort === 443) || (!tls && proxyPort === 80) ? "" : `:${proxyPort}`;
+    const url = `${protocol}://${app.name}.${tld}${portSuffix}`;
+    appUrls.push({ name: app.name, url });
+
+    const hostname = parseHostname(app.name, tld);
+    store.addRoute(hostname, appPort, process.pid);
+    routes.push({ hostname });
+
+    const entry: ManifestEntry = {
+      PORT: String(appPort),
+      HOST: "127.0.0.1",
+      PORTLESS_URL: url,
+    };
+    if (tls) {
+      const caPath = path.join(stateDir, "ca.pem");
+      if (fs.existsSync(caPath)) {
+        entry.NODE_EXTRA_CA_CERTS = caPath;
+      }
+    }
+    manifest[app.pkg.dir] = entry;
+  }
+
+  ensureEnvLoader();
+  writeManifest(manifest);
+
+  if (appUrls.length > 0) {
+    const maxName = Math.max(...appUrls.map((a) => a.name.length));
+    for (const { name, url } of appUrls) {
+      const pad = " ".repeat(maxName - name.length);
+      console.log(`  ${chalk.bold(name)}${pad}  ${chalk.cyan(url)}`);
+    }
+  }
+  if (taskApps.length > 0) {
+    console.log("");
+    for (const app of taskApps) {
+      console.log(`  ${chalk.gray(app.name)}  ${chalk.gray(app.commandArgs.join(" "))}`);
+    }
+  }
+  console.log("");
+
+  const pm = detectPackageManager(wsRoot);
+  const turboArgs =
+    pm === "npm"
+      ? ["npx", "turbo", "run", scriptName]
+      : pm === "bun"
+        ? ["bunx", "turbo", "run", scriptName]
+        : [pm, "exec", "turbo", "run", scriptName];
+
+  const turboChild = spawn(turboArgs[0], turboArgs.slice(1), {
+    stdio: "inherit",
+    cwd: wsRoot,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: buildNodeOptions(),
+    },
+  });
+
+  const SIGKILL_TIMEOUT_MS = 5_000;
+
+  const cleanup = () => {
+    try {
+      turboChild.kill("SIGTERM");
+    } catch {
+      // already dead
+    }
+    setTimeout(() => {
+      if (turboChild.exitCode === null && !turboChild.killed) {
+        try {
+          turboChild.kill("SIGKILL");
+        } catch {
+          // already dead
+        }
+      }
+    }, SIGKILL_TIMEOUT_MS).unref();
+
+    for (const { hostname } of routes) {
+      try {
+        store.removeRoute(hostname);
+      } catch {
+        // non-fatal
+      }
+    }
+    removeManifest();
+  };
+
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+
+  const exitCode = await new Promise<number | null>((resolve) => {
+    turboChild.on("exit", (code) => resolve(code));
+  });
+
+  cleanup();
+
+  if (exitCode !== 0 && exitCode !== null) {
+    process.exit(exitCode);
+  }
+}
+
+async function runWithDirectSpawn(
+  stateDir: string,
+  proxyPort: number,
+  tls: boolean,
+  tld: string,
+  proxiedApps: MultiAppEntry[],
+  taskApps: MultiAppEntry[]
+): Promise<void> {
   const children: ReturnType<typeof spawn>[] = [];
   const exitCodes = new Map<string, number | null>();
   const appUrls: { name: string; url: string; cmd: string }[] = [];
@@ -2725,7 +2877,14 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   // Sequential: each spawnProxiedApp calls findFreePort() which binds/releases
   // a port, so parallel spawning could cause port collisions.
   for (const app of proxiedApps) {
-    const { child, displayUrl } = await spawnProxiedApp(app, dir, port, tls, tld, exitCodes);
+    const { child, displayUrl } = await spawnProxiedApp(
+      app,
+      stateDir,
+      proxyPort,
+      tls,
+      tld,
+      exitCodes
+    );
     children.push(child);
     appUrls.push({ name: app.name, url: displayUrl, cmd: app.commandArgs.join(" ") });
   }

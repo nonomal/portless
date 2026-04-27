@@ -267,6 +267,20 @@ describe("loadConfig validation", () => {
     expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
+  it("accepts turbo as a boolean", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "portless.json"),
+      JSON.stringify({ name: "test", turbo: false })
+    );
+    const result = loadConfig(tmpDir);
+    expect(result?.config.turbo).toBe(false);
+  });
+
+  it("throws when turbo is not a boolean", () => {
+    fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ turbo: "yes" }));
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
+  });
+
   it("warns on unknown top-level keys", () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
     fs.writeFileSync(

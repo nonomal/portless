@@ -17,6 +17,7 @@ export interface AppConfig {
 
 export interface PortlessConfig extends AppConfig {
   apps?: Record<string, AppConfig>;
+  turbo?: boolean;
 }
 
 export interface LoadedConfig {
@@ -293,7 +294,7 @@ function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
 }
 
-const KNOWN_TOP_KEYS = new Set(["name", "script", "appPort", "proxy", "apps"]);
+const KNOWN_TOP_KEYS = new Set(["name", "script", "appPort", "proxy", "apps", "turbo"]);
 const KNOWN_APP_KEYS = new Set(["name", "script", "appPort", "proxy"]);
 
 function validateConfig(config: unknown, configPath: string): asserts config is PortlessConfig {
@@ -331,6 +332,12 @@ function validateConfig(config: unknown, configPath: string): asserts config is 
   if (obj.proxy !== undefined) {
     if (typeof obj.proxy !== "boolean") {
       throw new ConfigValidationError(`"proxy" in ${configPath} must be a boolean.`);
+    }
+  }
+
+  if (obj.turbo !== undefined) {
+    if (typeof obj.turbo !== "boolean") {
+      throw new ConfigValidationError(`"turbo" in ${configPath} must be a boolean.`);
     }
   }
 
