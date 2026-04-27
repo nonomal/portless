@@ -62,7 +62,7 @@ import {
   unpublish,
   cleanupAll as cleanupMdns,
 } from "./mdns.js";
-import { loadConfig, resolveAppConfig, resolveScript, hasScript } from "./config.js";
+import { loadConfig, resolveAppConfig, resolveScript, hasScript, isServerCommand, loadPackagePortlessConfig } from "./config.js";
 import type { AppConfig } from "./config.js";
 import { findWorkspaceRoot, discoverWorkspacePackages } from "./workspace.js";
 import type { WorkspacePackage } from "./workspace.js";
@@ -2422,6 +2422,8 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     name: string;
     commandArgs: string[];
     appPort?: number;
+    /** Whether this app should be proxied. False for build-only tools. */
+    proxied: boolean;
   }
 
   const apps: AppEntry[] = [];
@@ -2430,14 +2432,28 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     if (!pkg.scripts[scriptName]) continue;
 
     const rel = path.relative(wsRoot, pkg.dir).replace(/\\/g, "/");
-    const appOverride = loaded ? resolveAppConfig(loaded.config, loaded.configDir, pkg.dir) : null;
+    const rootOverride = loaded ? resolveAppConfig(loaded.config, loaded.configDir, pkg.dir) : null;
+    const pkgConfig = loadPackagePortlessConfig(pkg.dir);
 
-    const effectiveScript = appOverride?.script ?? scriptName;
+    // Merge: root apps map > package.json "portless" key > defaults
+    const appOverride: AppConfig = {
+      ...pkgConfig,
+      ...Object.fromEntries(
+        Object.entries(rootOverride ?? {}).filter(([, v]) => v !== undefined)
+      ),
+    };
+
+    const effectiveScript = appOverride.script ?? scriptName;
     const resolved = resolveScript(effectiveScript, pkg.dir);
     if (!resolved) continue;
 
+    // Determine if this app should be proxied.
+    // Explicit config wins, then check if the command is a known build tool.
+    const proxied =
+      appOverride.proxy !== undefined ? appOverride.proxy : isServerCommand(resolved);
+
     let name: string;
-    if (appOverride?.name) {
+    if (appOverride.name) {
       name = appOverride.name
         .split(".")
         .map((label) => truncateLabel(label))
@@ -2453,13 +2469,16 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
       name = pkgLabel === projectName ? projectName : `${pkgLabel}.${projectName}`;
     }
 
-    apps.push({ pkg, name, commandArgs: resolved, appPort: appOverride?.appPort });
+    apps.push({ pkg, name, commandArgs: resolved, appPort: appOverride.appPort, proxied });
   }
 
   if (apps.length === 0) {
     console.error(colors.yellow(`No workspace packages have a "${scriptName}" script.`));
     process.exit(1);
   }
+
+  const proxiedApps = apps.filter((a) => a.proxied);
+  const taskApps = apps.filter((a) => !a.proxied);
 
   console.log(chalk.blue.bold(`\nportless\n`));
   console.log(chalk.gray(`Starting ${apps.length} app${apps.length === 1 ? "" : "s"}...\n`));
@@ -2470,7 +2489,8 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   // For multi-app, we spawn each as a separate child process.
   const children: ReturnType<typeof spawn>[] = [];
 
-  for (const app of apps) {
+  // Print proxied apps first, then tasks.
+  for (const app of proxiedApps) {
     const commandStr = app.commandArgs.join(" ");
     const usesPortless = app.commandArgs[0] === "portless";
 
@@ -2557,6 +2577,46 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
         } catch {
           // non-fatal
         }
+      }
+    });
+
+    children.push(child);
+  }
+
+  // Spawn task apps (build watchers etc.) — no proxy route, just run the command.
+  if (taskApps.length > 0) {
+    console.log(chalk.gray(`\n  Tasks:\n`));
+  }
+  for (const app of taskApps) {
+    const commandStr = app.commandArgs.join(" ");
+    const pkgEnv = { ...process.env };
+    pkgEnv.PATH = augmentedPath(pkgEnv, app.pkg.dir);
+
+    console.log(chalk.gray(`  ${app.name}`), chalk.gray(`(${commandStr})`));
+
+    const child = isWindows
+      ? spawn("cmd.exe", ["/d", "/s", "/c", commandStr], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: pkgEnv,
+          cwd: app.pkg.dir,
+        })
+      : spawn("/bin/sh", ["-c", commandStr], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: pkgEnv,
+          cwd: app.pkg.dir,
+        });
+
+    const prefix = chalk.gray(`[${app.name}]`);
+
+    child.stdout?.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line) process.stdout.write(`${prefix} ${line}\n`);
+      }
+    });
+
+    child.stderr?.on("data", (data: Buffer) => {
+      for (const line of data.toString().split("\n")) {
+        if (line) process.stderr.write(`${prefix} ${line}\n`);
       }
     });
 

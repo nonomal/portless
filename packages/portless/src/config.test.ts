@@ -2,7 +2,15 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { loadConfig, resolveAppConfig, resolveScript, hasScript, splitCommand } from "./config.js";
+import {
+  loadConfig,
+  resolveAppConfig,
+  resolveScript,
+  hasScript,
+  splitCommand,
+  isServerCommand,
+  loadPackagePortlessConfig,
+} from "./config.js";
 
 function createTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "portless-config-test-"));
@@ -92,6 +100,67 @@ describe("loadConfig", () => {
     const result = loadConfig(tmpDir);
     expect(result).not.toBeNull();
     expect(result!.config).toEqual({});
+  });
+
+  it("loads config from package.json portless key", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: { name: "myapp", script: "dev" } })
+    );
+    const result = loadConfig(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result!.config.name).toBe("myapp");
+    expect(result!.config.script).toBe("dev");
+    expect(result!.configDir).toBe(tmpDir);
+  });
+
+  it("loads string shorthand from package.json portless key", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: "myapp" })
+    );
+    const result = loadConfig(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result!.config.name).toBe("myapp");
+  });
+
+  it("ignores empty string portless key", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: "" })
+    );
+    expect(loadConfig(tmpDir)).toBeNull();
+  });
+
+  it("prefers portless.json over package.json portless key", () => {
+    fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ name: "from-file" }));
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: { name: "from-pkg" } })
+    );
+    const result = loadConfig(tmpDir);
+    expect(result!.config.name).toBe("from-file");
+  });
+
+  it("ignores package.json without portless key", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", scripts: { dev: "next dev" } })
+    );
+    expect(loadConfig(tmpDir)).toBeNull();
+  });
+
+  it("walks up to find package.json portless key", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: { name: "root-app" } })
+    );
+    const subDir = path.join(tmpDir, "packages", "web");
+    fs.mkdirSync(subDir, { recursive: true });
+    const result = loadConfig(subDir);
+    expect(result).not.toBeNull();
+    expect(result!.config.name).toBe("root-app");
+    expect(result!.configDir).toBe(tmpDir);
   });
 });
 
@@ -315,6 +384,78 @@ describe("hasScript", () => {
   it("returns false when scripts object is missing", () => {
     fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "test" }));
     expect(hasScript("dev", tmpDir)).toBe(false);
+  });
+});
+
+describe("loadPackagePortlessConfig", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = createTmpDir();
+  });
+
+  afterEach(() => {
+    cleanupDir(tmpDir);
+  });
+
+  it("returns config from package.json portless key", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: { name: "myapp", proxy: false } })
+    );
+    const result = loadPackagePortlessConfig(tmpDir);
+    expect(result).toEqual({ name: "myapp", proxy: false });
+  });
+
+  it("returns config from string shorthand", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: "myapp" })
+    );
+    const result = loadPackagePortlessConfig(tmpDir);
+    expect(result).toEqual({ name: "myapp" });
+  });
+
+  it("returns null for empty string shorthand", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: "" })
+    );
+    expect(loadPackagePortlessConfig(tmpDir)).toBeNull();
+  });
+
+  it("returns null when no portless key", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test" })
+    );
+    expect(loadPackagePortlessConfig(tmpDir)).toBeNull();
+  });
+
+  it("returns null when no package.json", () => {
+    expect(loadPackagePortlessConfig(tmpDir)).toBeNull();
+  });
+});
+
+describe("isServerCommand", () => {
+  it("returns true for web server commands", () => {
+    expect(isServerCommand(["next", "dev"])).toBe(true);
+    expect(isServerCommand(["vite"])).toBe(true);
+    expect(isServerCommand(["node", "server.js"])).toBe(true);
+    expect(isServerCommand(["remix", "dev"])).toBe(true);
+  });
+
+  it("returns false for build-only commands", () => {
+    expect(isServerCommand(["tsup", "--watch"])).toBe(false);
+    expect(isServerCommand(["tsc", "--watch"])).toBe(false);
+    expect(isServerCommand(["esbuild", "src/index.ts"])).toBe(false);
+    expect(isServerCommand(["rollup", "-c", "-w"])).toBe(false);
+    expect(isServerCommand(["swc", "src", "-d", "dist", "-w"])).toBe(false);
+    expect(isServerCommand(["unbuild"])).toBe(false);
+  });
+
+  it("returns false for empty args", () => {
+    expect(isServerCommand([])).toBe(false);
   });
 });
 

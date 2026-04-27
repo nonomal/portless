@@ -6,6 +6,7 @@ export interface AppConfig {
   name?: string;
   script?: string;
   appPort?: number;
+  proxy?: boolean;
 }
 
 export interface PortlessConfig extends AppConfig {
@@ -20,12 +21,14 @@ export interface LoadedConfig {
 const CONFIG_FILENAME = "portless.json";
 
 /**
- * Walk up from `cwd` looking for portless.json. Returns the parsed config
- * and the directory it was found in, or null if no config exists.
+ * Walk up from `cwd` looking for portless config. Checks `portless.json`
+ * first, then falls back to a `"portless"` key in `package.json`.
+ * Returns the parsed config and the directory it was found in, or null.
  */
 export function loadConfig(cwd: string = process.cwd()): LoadedConfig | null {
   let dir = cwd;
   for (;;) {
+    // Prefer standalone portless.json
     const configPath = path.join(dir, CONFIG_FILENAME);
     try {
       const raw = fs.readFileSync(configPath, "utf-8");
@@ -34,6 +37,10 @@ export function loadConfig(cwd: string = process.cwd()): LoadedConfig | null {
       return { config: parsed, configDir: dir };
     } catch (err) {
       if (isErrnoException(err) && err.code === "ENOENT") {
+        // No portless.json — try package.json "portless" key
+        const fromPkg = loadConfigFromPackageJson(dir);
+        if (fromPkg) return fromPkg;
+
         const parent = path.dirname(dir);
         if (parent === dir) return null;
         dir = parent;
@@ -46,6 +53,56 @@ export function loadConfig(cwd: string = process.cwd()): LoadedConfig | null {
       throw err;
     }
   }
+}
+
+/** Normalize the raw `"portless"` value: a string is shorthand for `{ name }`. */
+function normalizePortlessValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.trim() ? { name: value.trim() } : null;
+  }
+  return value;
+}
+
+function loadConfigFromPackageJson(dir: string): LoadedConfig | null {
+  const pkgPath = path.join(dir, "package.json");
+  try {
+    const raw = fs.readFileSync(pkgPath, "utf-8");
+    const pkg = JSON.parse(raw);
+    if (pkg && typeof pkg === "object" && "portless" in pkg) {
+      const config = normalizePortlessValue(pkg.portless);
+      if (config === null) return null;
+      validateConfig(config, `${pkgPath} "portless"`);
+      return { config: config as PortlessConfig, configDir: dir };
+    }
+  } catch (err) {
+    if (isErrnoException(err) && err.code === "ENOENT") return null;
+    if (err instanceof SyntaxError) return null;
+    throw err;
+  }
+  return null;
+}
+
+/**
+ * Load the `"portless"` config from a specific directory's package.json
+ * (does not walk up). Returns the AppConfig fields or null.
+ */
+export function loadPackagePortlessConfig(dir: string): AppConfig | null {
+  const pkgPath = path.join(dir, "package.json");
+  try {
+    const raw = fs.readFileSync(pkgPath, "utf-8");
+    const pkg = JSON.parse(raw);
+    if (pkg && typeof pkg === "object" && "portless" in pkg) {
+      const config = normalizePortlessValue(pkg.portless);
+      if (config === null) return null;
+      if (typeof config === "object" && !Array.isArray(config)) {
+        validateAppConfig(config as Record<string, unknown>, "portless", pkgPath);
+        return config as AppConfig;
+      }
+    }
+  } catch {
+    // Ignore — missing or unparseable
+  }
+  return null;
 }
 
 /**
@@ -115,6 +172,33 @@ export function splitCommand(command: string): string[] {
   return command.trim().split(/\s+/).filter(Boolean);
 }
 
+/**
+ * Commands that are build tools / watchers and never start an HTTP server.
+ * Used to auto-detect packages that should run without a proxy route.
+ */
+const BUILD_ONLY_COMMANDS = new Set([
+  "tsup",
+  "tsc",
+  "esbuild",
+  "rollup",
+  "babel",
+  "swc",
+  "unbuild",
+  "pkgroll",
+  "ncc",
+  "microbundle",
+]);
+
+/**
+ * Returns true if the command looks like it starts an HTTP server
+ * (and should be proxied), false if it's a known build-only tool.
+ */
+export function isServerCommand(args: string[]): boolean {
+  if (args.length === 0) return false;
+  const bin = path.basename(args[0]);
+  return !BUILD_ONLY_COMMANDS.has(bin);
+}
+
 /** Normalize path separators to forward slashes for cross-platform matching. */
 function normalizePath(p: string): string {
   return p.replace(/\\/g, "/");
@@ -156,6 +240,13 @@ function validateConfig(config: unknown, configPath: string): asserts config is 
       console.error(
         colors.red(`Error: "appPort" in ${configPath} must be an integer between 1 and 65535.`)
       );
+      process.exit(1);
+    }
+  }
+
+  if (obj.proxy !== undefined) {
+    if (typeof obj.proxy !== "boolean") {
+      console.error(colors.red(`Error: "proxy" in ${configPath} must be a boolean.`));
       process.exit(1);
     }
   }
@@ -203,6 +294,14 @@ function validateAppConfig(obj: Record<string, unknown>, prefix: string, configP
         colors.red(
           `Error: "${prefix}.appPort" in ${configPath} must be an integer between 1 and 65535.`
         )
+      );
+      process.exit(1);
+    }
+  }
+  if (obj.proxy !== undefined) {
+    if (typeof obj.proxy !== "boolean") {
+      console.error(
+        colors.red(`Error: "${prefix}.proxy" in ${configPath} must be a boolean.`)
       );
       process.exit(1);
     }
