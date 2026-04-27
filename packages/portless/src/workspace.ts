@@ -10,7 +10,7 @@ export interface WorkspacePackage {
   scripts: Record<string, string>;
 }
 
-export type WorkspaceSource = "pnpm" | "package-json";
+type WorkspaceSource = "pnpm" | "package-json";
 
 /**
  * Walk up from `cwd` looking for a workspace root.

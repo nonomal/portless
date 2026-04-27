@@ -40,7 +40,6 @@ import {
   isLanEnvEnabled,
   isProxyRunning,
   isWindows,
-  prompt,
   readLanMarker,
   readPersistedProxyState,
   readTldFromDir,
@@ -66,10 +65,11 @@ import {
 import {
   loadConfig,
   resolveAppConfig,
-  resolveScript,
   resolveScriptCommand,
   hasScript,
   isServerCommand,
+  splitCommand,
+  detectPackageManager,
   loadPackagePortlessConfig,
   ConfigValidationError,
 } from "./config.js";
@@ -767,8 +767,7 @@ function listRoutes(store: RouteStore, proxyPort: number, tls: boolean): void {
 
 type EnsureProxyResult =
   | { started: true; state: Awaited<ReturnType<typeof discoverState>> }
-  | { started: false; skipped: true }
-  | { started: false; skipped?: false };
+  | { started: false };
 
 interface ProxyDesiredState {
   explicit: ProxyConfigExplicitness;
@@ -803,17 +802,13 @@ function resolveProxyDesiredState(lanMode: boolean): ProxyDesiredState {
 
 /**
  * Check if the proxy is running and auto-start it if needed.
- * Returns the discovered state after start, or `{ skipped: true }` when the
- * user chose to skip, or `{ started: false }` when the proxy was already up.
- *
- * When `onSkip` is provided and the user chooses "skip", calls `onSkip`
- * and returns `{ skipped: true }`. Pass null to disable the skip option.
+ * Returns the discovered state after start, or `{ started: false }` when
+ * the proxy was already up.
  */
 async function ensureProxyRunning(
   proxyPort: number,
   tls: boolean,
-  desired: ProxyDesiredState,
-  onSkip: (() => void) | null
+  desired: ProxyDesiredState
 ): Promise<EnsureProxyResult> {
   const { explicit, desiredConfig } = desired;
 
@@ -865,29 +860,7 @@ async function ensureProxyRunning(
     process.exit(1);
   }
 
-  if (needsSudo) {
-    const answer = await prompt(colors.yellow("Proxy not running. Start it? [Y/n/skip] "));
-
-    if (answer === "n" || answer === "no") {
-      console.log(colors.gray("Cancelled."));
-      process.exit(0);
-    }
-
-    if (onSkip && (answer === "s" || answer === "skip")) {
-      onSkip();
-      return { started: false, skipped: true };
-    }
-  }
-
-  if (persisted && startPort !== undefined) {
-    console.log(
-      colors.yellow(
-        `Starting proxy with previous configuration (port ${startPort}, ${startConfig.useHttps ? "HTTPS" : "HTTP"})...`
-      )
-    );
-  } else {
-    console.log(colors.yellow("Starting proxy..."));
-  }
+  console.log(colors.gray("Starting proxy..."));
   const proxyStartConfig = buildProxyStartConfig({
     useHttps: startConfig.useHttps,
     customCertPath: startConfig.customCertPath,
@@ -932,7 +905,6 @@ async function ensureProxyRunning(
     return { started: false }; // unreachable; helps TypeScript narrow `discovered`
   }
 
-  console.log(colors.green("Proxy started in background"));
   return { started: true, state: discovered };
 }
 
@@ -964,14 +936,7 @@ async function runApp(
   // Validate the hostname before we try to auto-start the proxy.
   parseHostname(name, tld);
 
-  const ensureResult = await ensureProxyRunning(proxyPort, tls, desired, () => {
-    console.log(colors.gray("Skipping proxy, running command directly...\n"));
-    spawnCommand(commandArgs);
-  });
-
-  if (ensureResult.started === false && ensureResult.skipped) {
-    return;
-  }
+  const ensureResult = await ensureProxyRunning(proxyPort, tls, desired);
 
   if (ensureResult.started) {
     proxyPort = ensureResult.state.port;
@@ -2522,8 +2487,7 @@ async function spawnProxiedApp(
   tls: boolean,
   tld: string,
   exitCodes: Map<string, number | null>
-): Promise<ReturnType<typeof spawn>> {
-  const displayStr = app.commandArgs.join(" ");
+): Promise<{ child: ReturnType<typeof spawn>; displayUrl: string }> {
   const usesPortless = app.commandArgs[0] === "portless";
 
   const pkgEnv: Record<string, string | undefined> = { ...process.env };
@@ -2567,12 +2531,6 @@ async function spawnProxiedApp(
     }
   }
 
-  console.log(
-    chalk.cyan(`  ${app.name}`),
-    chalk.gray(`-> ${displayUrl}`),
-    chalk.gray(`(${displayStr})`)
-  );
-
   const child = spawnChildProcess(app.commandArgs, env, app.pkg.dir);
   pipeOutput(child, chalk.cyan(`[${app.name}]`));
 
@@ -2594,18 +2552,15 @@ async function spawnProxiedApp(
     }
   });
 
-  return child;
+  return { child, displayUrl };
 }
 
 function spawnTaskApp(
   app: MultiAppEntry,
   exitCodes: Map<string, number | null>
 ): ReturnType<typeof spawn> {
-  const displayStr = app.commandArgs.join(" ");
   const pkgEnv: Record<string, string | undefined> = { ...process.env };
   pkgEnv.PATH = augmentedPath(pkgEnv, app.pkg.dir);
-
-  console.log(chalk.gray(`  ${app.name}`), chalk.gray(`(${displayStr})`));
 
   const child = spawnChildProcess(app.commandArgs, pkgEnv, app.pkg.dir);
   pipeOutput(child, chalk.gray(`[${app.name}]`));
@@ -2675,7 +2630,16 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   for (const pkg of packages) {
     const rel = path.relative(wsRoot, pkg.dir).replace(/\\/g, "/");
     const rootOverride = loaded ? resolveAppConfig(loaded.config, loaded.configDir, pkg.dir) : null;
-    const pkgConfig = loadPackagePortlessConfig(pkg.dir);
+    let pkgConfig: AppConfig | null;
+    try {
+      pkgConfig = loadPackagePortlessConfig(pkg.dir);
+    } catch (err) {
+      if (err instanceof ConfigValidationError) {
+        console.error(colors.red(`Error: ${err.message}`));
+        process.exit(1);
+      }
+      throw err;
+    }
 
     // Merge (closest wins): package.json "portless" > portless.json app entry > defaults
     const appOverride: AppConfig = {
@@ -2684,13 +2648,14 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     };
 
     const effectiveScript = appOverride.script ?? scriptName;
-    if (!pkg.scripts[effectiveScript]) continue;
+    const scriptValue = pkg.scripts[effectiveScript];
+    if (!scriptValue) continue;
 
-    const rawScript = resolveScript(effectiveScript, pkg.dir);
-    if (!rawScript) continue;
+    const rawScript = splitCommand(scriptValue);
+    if (rawScript.length === 0) continue;
 
-    const commandArgs = resolveScriptCommand(effectiveScript, pkg.dir);
-    if (!commandArgs) continue;
+    const pm = detectPackageManager(pkg.dir);
+    const commandArgs = [pm, "run", effectiveScript];
 
     const proxied = appOverride.proxy ?? isServerCommand(rawScript);
 
@@ -2723,7 +2688,6 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   const taskApps = apps.filter((a) => !a.proxied);
 
   console.log(chalk.blue.bold(`\nportless\n`));
-  console.log(chalk.gray(`Starting ${apps.length} app${apps.length === 1 ? "" : "s"}...\n`));
 
   let { dir, port, tls, tld } = await discoverState();
 
@@ -2735,35 +2699,50 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
       console.error(colors.red(`Error: ${(err as Error).message}`));
       process.exit(1);
     }
-    const ensureResult = await ensureProxyRunning(port, tls, multiDesired, null);
+    const ensureResult = await ensureProxyRunning(port, tls, multiDesired);
     if (ensureResult.started) {
       dir = ensureResult.state.dir;
       port = ensureResult.state.port;
       tls = ensureResult.state.tls;
       tld = ensureResult.state.tld;
-    } else if (!("skipped" in ensureResult && ensureResult.skipped)) {
-      // Proxy was already running -- re-discover to pick up current state
-      // (markers may have been recreated since the first call).
+    } else {
+      // Proxy was already running; re-discover to pick up current state.
       ({ dir, port, tls, tld } = await discoverState());
     }
   }
 
   const children: ReturnType<typeof spawn>[] = [];
   const exitCodes = new Map<string, number | null>();
+  const appUrls: { name: string; url: string; cmd: string }[] = [];
 
   // Sequential: each spawnProxiedApp calls findFreePort() which binds/releases
   // a port, so parallel spawning could cause port collisions.
   for (const app of proxiedApps) {
-    children.push(await spawnProxiedApp(app, dir, port, tls, tld, exitCodes));
+    const { child, displayUrl } = await spawnProxiedApp(app, dir, port, tls, tld, exitCodes);
+    children.push(child);
+    appUrls.push({ name: app.name, url: displayUrl, cmd: app.commandArgs.join(" ") });
   }
 
-  if (taskApps.length > 0) {
-    console.log(chalk.gray(`\n  Tasks:\n`));
-  }
+  const taskNames: { name: string; cmd: string }[] = [];
   for (const app of taskApps) {
     children.push(spawnTaskApp(app, exitCodes));
+    taskNames.push({ name: app.name, cmd: app.commandArgs.join(" ") });
   }
 
+  // Print a clean summary after all processes are spawned.
+  if (appUrls.length > 0) {
+    const maxName = Math.max(...appUrls.map((a) => a.name.length));
+    for (const { name, url, cmd } of appUrls) {
+      const pad = " ".repeat(maxName - name.length);
+      console.log(`  ${chalk.bold(name)}${pad}  ${chalk.cyan(url)}  ${chalk.gray(cmd)}`);
+    }
+  }
+  if (taskNames.length > 0) {
+    console.log("");
+    for (const { name, cmd } of taskNames) {
+      console.log(`  ${chalk.gray(name)}  ${chalk.gray(cmd)}`);
+    }
+  }
   console.log("");
 
   const SIGKILL_TIMEOUT_MS = 5_000;

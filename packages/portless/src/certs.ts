@@ -77,7 +77,8 @@ function caFingerprint(stateDir: string): string | null {
 
 function readTrustMarker(stateDir: string): string | null {
   try {
-    return fs.readFileSync(path.join(stateDir, CA_TRUST_MARKER), "utf-8").trim();
+    const value = fs.readFileSync(path.join(stateDir, CA_TRUST_MARKER), "utf-8").trim();
+    return value || null;
   } catch {
     return null;
   }
@@ -95,7 +96,7 @@ function clearTrustMarker(stateDir: string): void {
   try {
     fs.unlinkSync(path.join(stateDir, CA_TRUST_MARKER));
   } catch {
-    // Marker may not exist yet — ignore.
+    // Marker may not exist yet; ignore.
   }
 }
 
@@ -400,19 +401,17 @@ export function ensureCerts(stateDir: string): {
   const serverKeyPath = path.join(stateDir, SERVER_KEY_FILE);
 
   let caGenerated = false;
-
-  // Ensure CA exists
-  if (
+  const caMissing =
     !fileExists(caCertPath) ||
     !fileExists(caKeyPath) ||
     !isCertValid(caCertPath) ||
-    !isCertSignatureStrong(caCertPath)
-  ) {
+    !isCertSignatureStrong(caCertPath);
+
+  if (caMissing) {
     generateCA(stateDir);
     caGenerated = true;
   }
 
-  // Ensure server cert exists and is valid
   if (
     caGenerated ||
     !fileExists(serverCertPath) ||
@@ -426,7 +425,7 @@ export function ensureCerts(stateDir: string): {
 
   return {
     certPath: serverCertPath,
-    keyPath: path.join(stateDir, SERVER_KEY_FILE),
+    keyPath: serverKeyPath,
     caPath: caCertPath,
     caGenerated,
   };

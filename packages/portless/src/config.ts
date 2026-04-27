@@ -93,8 +93,8 @@ export function loadPackagePortlessConfig(dir: string): AppConfig | null {
         return config as AppConfig;
       }
     }
-  } catch {
-    // Ignore — missing or unparseable
+  } catch (err) {
+    if (err instanceof ConfigValidationError) throw err;
   }
   return null;
 }
@@ -232,7 +232,7 @@ export function splitCommand(command: string): string[] {
       escaped = false;
       continue;
     }
-    if (ch === "\\") {
+    if (ch === "\\" && !inSingle) {
       escaped = true;
       continue;
     }
@@ -293,6 +293,9 @@ function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
 }
 
+const KNOWN_TOP_KEYS = new Set(["name", "script", "appPort", "proxy", "apps"]);
+const KNOWN_APP_KEYS = new Set(["name", "script", "appPort", "proxy"]);
+
 function validateConfig(config: unknown, configPath: string): asserts config is PortlessConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new ConfigValidationError(`${configPath} must be a JSON object.`);
@@ -342,6 +345,8 @@ function validateConfig(config: unknown, configPath: string): asserts config is 
       validateAppConfig(value as Record<string, unknown>, `apps.${key}`, configPath);
     }
   }
+
+  warnUnknownKeys(obj, KNOWN_TOP_KEYS, configPath);
 }
 
 function validateAppConfig(obj: Record<string, unknown>, prefix: string, configPath: string): void {
@@ -374,6 +379,24 @@ function validateAppConfig(obj: Record<string, unknown>, prefix: string, configP
   if (obj.proxy !== undefined) {
     if (typeof obj.proxy !== "boolean") {
       throw new ConfigValidationError(`"${prefix}.proxy" in ${configPath} must be a boolean.`);
+    }
+  }
+
+  warnUnknownKeys(obj, KNOWN_APP_KEYS, configPath, prefix);
+}
+
+function warnUnknownKeys(
+  obj: Record<string, unknown>,
+  known: Set<string>,
+  configPath: string,
+  prefix?: string
+): void {
+  for (const key of Object.keys(obj)) {
+    if (!known.has(key)) {
+      const label = prefix ? `"${prefix}.${key}"` : `"${key}"`;
+      console.warn(
+        `Warning: Unknown key ${label} in ${configPath}. Known keys: ${[...known].join(", ")}`
+      );
     }
   }
 }

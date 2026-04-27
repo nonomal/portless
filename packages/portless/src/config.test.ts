@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -81,6 +81,10 @@ describe("splitCommand", () => {
 
   it("handles backslash-escaped spaces", () => {
     expect(splitCommand("path\\ with\\ spaces arg")).toEqual(["path with spaces", "arg"]);
+  });
+
+  it("preserves backslash inside single quotes (POSIX behavior)", () => {
+    expect(splitCommand("echo 'hello\\nworld'")).toEqual(["echo", "hello\\nworld"]);
   });
 });
 
@@ -261,6 +265,28 @@ describe("loadConfig validation", () => {
   it("throws when proxy is not a boolean", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ proxy: "false" }));
     expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
+  });
+
+  it("warns on unknown top-level keys", () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fs.writeFileSync(
+      path.join(tmpDir, "portless.json"),
+      JSON.stringify({ name: "myapp", typo: true })
+    );
+    loadConfig(tmpDir);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('"typo"'));
+    spy.mockRestore();
+  });
+
+  it("warns on unknown keys in apps entries", () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fs.writeFileSync(
+      path.join(tmpDir, "portless.json"),
+      JSON.stringify({ apps: { "apps/web": { name: "web", port: 3000 } } })
+    );
+    loadConfig(tmpDir);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('"apps.apps/web.port"'));
+    spy.mockRestore();
   });
 });
 
@@ -469,6 +495,14 @@ describe("loadPackagePortlessConfig", () => {
 
   it("returns null when no package.json", () => {
     expect(loadPackagePortlessConfig(tmpDir)).toBeNull();
+  });
+
+  it("throws ConfigValidationError for invalid portless config", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "test", portless: { appPort: "bad" } })
+    );
+    expect(() => loadPackagePortlessConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 });
 
