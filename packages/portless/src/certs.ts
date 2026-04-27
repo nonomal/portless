@@ -50,6 +50,7 @@ const CA_KEY_FILE = "ca-key.pem";
 const CA_CERT_FILE = "ca.pem";
 const SERVER_KEY_FILE = "server-key.pem";
 const SERVER_CERT_FILE = "server.pem";
+const CA_TRUST_MARKER = "ca.trusted";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,6 +62,40 @@ function fileExists(filePath: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function caFingerprint(stateDir: string): string | null {
+  const caCertPath = path.join(stateDir, CA_CERT_FILE);
+  try {
+    const pem = fs.readFileSync(caCertPath);
+    return crypto.createHash("sha256").update(pem).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function readTrustMarker(stateDir: string): string | null {
+  try {
+    return fs.readFileSync(path.join(stateDir, CA_TRUST_MARKER), "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function writeTrustMarker(stateDir: string): void {
+  const fp = caFingerprint(stateDir);
+  if (fp) {
+    fs.writeFileSync(path.join(stateDir, CA_TRUST_MARKER), fp + "\n");
+    fixOwnership(path.join(stateDir, CA_TRUST_MARKER));
+  }
+}
+
+function clearTrustMarker(stateDir: string): void {
+  try {
+    fs.unlinkSync(path.join(stateDir, CA_TRUST_MARKER));
+  } catch {
+    // Marker may not exist yet — ignore.
   }
 }
 
@@ -255,6 +290,13 @@ function generateCA(stateDir: string): { certPath: string; keyPath: string } {
   fs.chmodSync(certPath, 0o644);
   fixOwnership(keyPath, certPath);
 
+  // New CA invalidates any previous trust marker.
+  try {
+    fs.unlinkSync(path.join(stateDir, CA_TRUST_MARKER));
+  } catch {
+    // Marker may not exist yet — ignore.
+  }
+
   return { certPath, keyPath };
 }
 
@@ -401,6 +443,13 @@ export function ensureCerts(stateDir: string): {
 export function isCATrusted(stateDir: string): boolean {
   const caCertPath = path.join(stateDir, CA_CERT_FILE);
   if (!fileExists(caCertPath)) return false;
+
+  // Fast path: if we previously trusted this exact CA, skip the OS check.
+  const marker = readTrustMarker(stateDir);
+  if (marker) {
+    const fp = caFingerprint(stateDir);
+    if (fp && marker === fp) return true;
+  }
 
   if (process.platform === "darwin") {
     return isCATrustedMacOS(caCertPath);
@@ -843,6 +892,7 @@ export function trustCA(stateDir: string): { trusted: boolean; error?: string } 
           { stdio: "pipe", timeout: MACOS_SECURITY_AUTH_TIMEOUT_MS }
         );
       }
+      writeTrustMarker(stateDir);
       return { trusted: true };
     } else if (process.platform === "linux") {
       const config = getLinuxCATrustConfig();
@@ -852,12 +902,14 @@ export function trustCA(stateDir: string): { trusted: boolean; error?: string } 
       const dest = path.join(config.certDir, "portless-ca.crt");
       fs.copyFileSync(caCertPath, dest);
       execFileSync(config.updateCommand, [], { stdio: "pipe", timeout: 30_000 });
+      writeTrustMarker(stateDir);
       return { trusted: true };
     } else if (process.platform === "win32") {
       execFileSync("certutil", ["-addstore", "-user", "Root", caCertPath], {
         stdio: "pipe",
         timeout: 30_000,
       });
+      writeTrustMarker(stateDir);
       return { trusted: true };
     }
     return { trusted: false, error: `Unsupported platform: ${process.platform}` };
@@ -894,24 +946,28 @@ export function trustCA(stateDir: string): { trusted: boolean; error?: string } 
 export function untrustCA(stateDir: string): { removed: boolean; error?: string } {
   const caCertPath = path.join(stateDir, CA_CERT_FILE);
   if (!fileExists(caCertPath)) {
+    clearTrustMarker(stateDir);
     return { removed: true };
   }
 
   if (!isCATrusted(stateDir)) {
+    clearTrustMarker(stateDir);
     return { removed: true };
   }
 
   try {
+    let result: { removed: boolean; error?: string };
     if (process.platform === "darwin") {
-      return untrustCAMacOS(caCertPath);
+      result = untrustCAMacOS(caCertPath);
+    } else if (process.platform === "linux") {
+      result = untrustCALinux(stateDir);
+    } else if (process.platform === "win32") {
+      result = untrustCAWindows(caCertPath);
+    } else {
+      result = { removed: false, error: `Unsupported platform: ${process.platform}` };
     }
-    if (process.platform === "linux") {
-      return untrustCALinux(stateDir);
-    }
-    if (process.platform === "win32") {
-      return untrustCAWindows(caCertPath);
-    }
-    return { removed: false, error: `Unsupported platform: ${process.platform}` };
+    if (result.removed) clearTrustMarker(stateDir);
+    return result;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return { removed: false, error: message };
