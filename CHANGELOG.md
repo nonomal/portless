@@ -1,8 +1,37 @@
 # Changelog
 
-## 0.10.3
+## 0.11.0
 
 <!-- release:start -->
+
+### New Features
+
+- **Zero-arg mode**: Run bare `portless` from any project directory to auto-discover the dev script from `package.json` and start it through the proxy. No arguments, no config required. (#251)
+- **Multi-app orchestration**: In monorepos, bare `portless` auto-discovers workspace packages (pnpm, npm, yarn, bun) and starts all dev scripts concurrently through the proxy. Each package gets a subdomain derived from its npm scope (e.g. `@acme/docs` becomes `docs.acme.localhost`). (#251)
+- **Turborepo integration**: When `turbo.json` is present, portless delegates to `turbo run <script>` instead of spawning each app individually. Per-app `PORT`, `HOST`, and `PORTLESS_URL` are injected via a lightweight `--require` loader so turbo retains dependency ordering and task graph awareness. Set `turbo: false` in config to opt out. (#251)
+- **`portless.json` config file**: Configure app name, script, port, and turbo settings without embedding portless in `package.json` scripts. Also supports a `"portless"` key in `package.json` as an inline alternative. (#251)
+- **`--script` flag**: Override the default `"dev"` script for a single invocation (e.g. `portless --script start`). (#251)
+- **Rsbuild support**: Auto-inject `--port` and `--host` CLI flags for Rsbuild dev server (#250)
+
+### Bug Fixes
+
+- **State directory moved to `~/.portless`**: All proxy state now lives in `~/.portless` instead of `/tmp/portless`, fixing repeated CA trust prompts on macOS (where `/tmp` is periodically cleaned) and a symlink local privilege escalation vulnerability (#251)
+- **Duplicate macOS CA certificates**: Fix `security delete-certificate` failing with "is ambiguous" when multiple portless CA entries had accumulated in the keychain (#251)
+- **CA trust marker caching**: Cache the CA fingerprint after a successful trust so subsequent proxy starts skip the OS security check and avoid re-triggering the macOS authentication dialog (#251)
+
+### Improvements
+
+- **Auto-trust CA on proxy auto-start**: When the proxy is auto-started and the CA is not yet trusted, portless automatically runs trust with proper sudo elevation (#251)
+- **Package manager delegation**: Detects pnpm, yarn, bun, or npm and delegates script execution to the correct package manager (#251)
+- **Non-server script detection**: Build-only tools (tsup, tsc, esbuild, etc.) are auto-detected and run without a proxy route. Use `proxy: false` in config for explicit control. (#251)
+- **Monochrome CLI output**: Bold for headers and errors, dim for warnings and muted text, no color codes (#251)
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.10.3
 
 ### Bug Fixes
 
@@ -11,7 +40,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.10.2
 
