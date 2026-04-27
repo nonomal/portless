@@ -6,6 +6,7 @@ import colors from "./colors.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { createSNICallback, ensureCerts, isCATrusted, trustCA, untrustCA } from "./certs.js";
 import { createHttpRedirectServer, createProxyServer } from "./proxy.js";
 import { fixOwnership, formatUrl, isErrnoException, parseHostname } from "./utils.js";
@@ -2374,11 +2375,27 @@ function loadAppConfig(cwd: string = process.cwd()): AppConfig | null {
 async function handleDefaultMode(globalScript?: string): Promise<boolean> {
   const cwd = process.cwd();
 
-  // Workspace root: multi-app mode
+  // Workspace root: multi-app mode, but only when at least one package
+  // has the target script. Otherwise fall through to single-app mode so
+  // a workspace root with its own portless.json + dev script still works.
   const wsRoot = findWorkspaceRoot(cwd);
   if (wsRoot === cwd) {
-    await handleDefaultMulti(cwd, globalScript);
-    return true;
+    const packages = discoverWorkspacePackages(cwd);
+    let wsScriptName: string;
+    try {
+      wsScriptName = globalScript ?? loadConfig(cwd)?.config.script ?? "dev";
+    } catch (err) {
+      if (err instanceof ConfigValidationError) {
+        console.error(colors.red(`Error: ${err.message}`));
+        process.exit(1);
+      }
+      throw err;
+    }
+    const hasMatchingPackages = packages.some((p) => p.scripts[wsScriptName]);
+    if (hasMatchingPackages) {
+      await handleDefaultMulti(cwd, globalScript);
+      return true;
+    }
   }
 
   // Single-app mode requires portless.json or --script to activate.
@@ -2476,19 +2493,20 @@ function prefixStream(
   prefix: string
 ): void {
   if (!stream) return;
+  const decoder = new StringDecoder("utf8");
   let buffer = "";
   stream.on("data", (data: Buffer) => {
-    buffer += data.toString();
+    buffer += decoder.write(data);
     let idx: number;
     while ((idx = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 1);
-      if (line) output.write(`${prefix} ${line}\n`);
+      output.write(`${prefix} ${line}\n`);
     }
   });
   stream.on("end", () => {
+    buffer += decoder.end();
     if (buffer) output.write(`${prefix} ${buffer}\n`);
-    buffer = "";
   });
 }
 
@@ -2748,6 +2766,8 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
 
   console.log("");
 
+  const SIGKILL_TIMEOUT_MS = 5_000;
+
   const cleanup = () => {
     for (const child of children) {
       try {
@@ -2756,6 +2776,17 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
         // already dead
       }
     }
+    setTimeout(() => {
+      for (const child of children) {
+        if (child.exitCode === null && !child.killed) {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // already dead
+          }
+        }
+      }
+    }, SIGKILL_TIMEOUT_MS).unref();
   };
 
   process.on("SIGINT", cleanup);

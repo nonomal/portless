@@ -78,6 +78,20 @@ catalog:
 `;
     expect(parsePnpmWorkspaceYaml(content)).toEqual(["apps/*", "packages/*"]);
   });
+
+  it("parses flow sequence on same line", () => {
+    expect(parsePnpmWorkspaceYaml("packages: [apps/*, packages/*]")).toEqual([
+      "apps/*",
+      "packages/*",
+    ]);
+  });
+
+  it("parses flow sequence with quotes", () => {
+    expect(parsePnpmWorkspaceYaml(`packages: ['apps/*', "packages/*"]`)).toEqual([
+      "apps/*",
+      "packages/*",
+    ]);
+  });
 });
 
 describe("expandPackageGlobs", () => {
@@ -127,6 +141,40 @@ describe("expandPackageGlobs", () => {
     const result = expandPackageGlobs(tmpDir, ["packages/**"]);
     expect(result).toHaveLength(1);
     expect(result).toContain(path.join(tmpDir, "packages", "shared"));
+  });
+
+  it("handles mid-path wildcard (packages/*/src)", () => {
+    const sharedSrc = path.join(tmpDir, "packages", "shared", "src");
+    const utilsSrc = path.join(tmpDir, "packages", "utils", "src");
+    fs.mkdirSync(sharedSrc, { recursive: true });
+    fs.mkdirSync(utilsSrc, { recursive: true });
+    // A package without src should not match
+    fs.mkdirSync(path.join(tmpDir, "packages", "no-src"), { recursive: true });
+
+    const result = expandPackageGlobs(tmpDir, ["packages/*/src"]);
+    expect(result).toHaveLength(2);
+    expect(result).toContain(sharedSrc);
+    expect(result).toContain(utilsSrc);
+  });
+
+  it("handles prefix wildcard (apps/team-*)", () => {
+    fs.mkdirSync(path.join(tmpDir, "apps", "team-alpha"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "apps", "team-beta"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "apps", "other"), { recursive: true });
+
+    const result = expandPackageGlobs(tmpDir, ["apps/team-*"]);
+    expect(result).toHaveLength(2);
+    expect(result).toContain(path.join(tmpDir, "apps", "team-alpha"));
+    expect(result).toContain(path.join(tmpDir, "apps", "team-beta"));
+  });
+
+  it("does not crash on prefix wildcard with trailing segments", () => {
+    fs.mkdirSync(path.join(tmpDir, "apps", "team-alpha", "sub"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "apps", "team-beta"), { recursive: true });
+
+    const result = expandPackageGlobs(tmpDir, ["apps/team-*/sub"]);
+    expect(result).toHaveLength(1);
+    expect(result).toContain(path.join(tmpDir, "apps", "team-alpha", "sub"));
   });
 });
 

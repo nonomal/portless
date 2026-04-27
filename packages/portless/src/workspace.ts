@@ -127,8 +127,14 @@ export function discoverWorkspacePackages(workspaceRoot: string): WorkspacePacka
 
 /**
  * Parse the `packages:` list from pnpm-workspace.yaml content.
- * Handles the simple format (flat list of `- <glob>` lines under `packages:`).
- * No YAML library needed.
+ *
+ * Supports the two common forms:
+ *   - Block list: `packages:\n  - glob\n  - glob`
+ *   - Flow sequence: `packages: [glob, glob]`
+ *
+ * This is an intentionally minimal parser covering the subset of YAML
+ * used by pnpm workspaces. It does not handle anchors, aliases, multi-line
+ * flow sequences, or nested structures.
  */
 export function parsePnpmWorkspaceYaml(content: string): string[] {
   const lines = content.split("\n");
@@ -138,7 +144,12 @@ export function parsePnpmWorkspaceYaml(content: string): string[] {
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
 
-    if (/^packages\s*:/.test(line)) {
+    const headerMatch = line.match(/^packages\s*:(.*)/);
+    if (headerMatch) {
+      const rest = headerMatch[1].trim();
+      if (rest.startsWith("[")) {
+        return parseFlowSequence(rest);
+      }
       inPackages = true;
       continue;
     }
@@ -168,11 +179,27 @@ export function parsePnpmWorkspaceYaml(content: string): string[] {
   return globs;
 }
 
+/** Parse a YAML flow sequence like `[apps/*, packages/*]`. */
+function parseFlowSequence(input: string): string[] {
+  const inner = input.replace(/^\[/, "").replace(/]\s*$/, "");
+  return inner
+    .split(",")
+    .map((s) => s.trim().replace(/^['"]/, "").replace(/['"]$/, "").trim())
+    .filter(Boolean);
+}
+
 /**
- * Expand workspace globs to actual directories. Supports:
- * - `dir/*` (single-level wildcard, most common)
- * - `dir` (literal directory)
- * - Negation patterns (`!dir`) are used to filter out matches.
+ * Expand workspace globs to actual directories.
+ *
+ * Supported patterns:
+ *   dir/\*  or  dir/\*\*   single-level wildcard
+ *   dir/\*\/sub             mid-path wildcard
+ *   dir/prefix-\*           prefix wildcard within a segment
+ *   dir                     literal directory
+ *   !dir                    negation (filters out matches)
+ *
+ * Only star wildcards within a single path segment are supported.
+ * Regex, question marks, and character classes are not handled.
  */
 export function expandPackageGlobs(root: string, globs: string[]): string[] {
   const included = new Set<string>();
@@ -198,24 +225,50 @@ export function expandPackageGlobs(root: string, globs: string[]): string[] {
   return [...included].sort();
 }
 
+/** Match a single path segment against a pattern containing `*`. */
+function segmentMatches(pattern: string, name: string): boolean {
+  if (pattern === "*" || pattern === "**") return true;
+  const starIdx = pattern.indexOf("*");
+  if (starIdx === -1) return pattern === name;
+  const prefix = pattern.slice(0, starIdx);
+  const suffix = pattern.slice(starIdx + 1).replace(/\*+$/, "");
+  return name.startsWith(prefix) && name.endsWith(suffix);
+}
+
 function expandSingleGlob(root: string, glob: string): string[] {
-  if (glob.endsWith("/*") || glob.endsWith("/**")) {
-    const baseDir = glob.replace(/\/\*+$/, "");
-    const fullBase = path.join(root, baseDir);
+  const segments = glob.split("/");
+  return expandSegments(root, segments);
+}
+
+function expandSegments(base: string, segments: string[]): string[] {
+  if (segments.length === 0) {
     try {
-      const entries = fs.readdirSync(fullBase, { withFileTypes: true });
-      return entries.filter((e) => e.isDirectory()).map((e) => path.join(fullBase, e.name));
+      const stat = fs.statSync(base);
+      if (stat.isDirectory()) return [base];
+    } catch {
+      // doesn't exist
+    }
+    return [];
+  }
+
+  const [current, ...rest] = segments;
+
+  if (current.includes("*")) {
+    try {
+      const entries = fs.readdirSync(base, { withFileTypes: true });
+      const matched = entries.filter((e) => e.isDirectory() && segmentMatches(current, e.name));
+      if (rest.length === 0) {
+        return matched.map((e) => path.join(base, e.name));
+      }
+      const results: string[] = [];
+      for (const entry of matched) {
+        results.push(...expandSegments(path.join(base, entry.name), rest));
+      }
+      return results;
     } catch {
       return [];
     }
   }
 
-  const full = path.join(root, glob);
-  try {
-    const stat = fs.statSync(full);
-    if (stat.isDirectory()) return [full];
-  } catch {
-    // doesn't exist
-  }
-  return [];
+  return expandSegments(path.join(base, current), rest);
 }
