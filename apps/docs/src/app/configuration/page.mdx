@@ -1,27 +1,24 @@
 # Configuration
 
+Bare `portless` works out of the box. It runs the `"dev"` script from `package.json` through the proxy, inferring the app name from the package name, git root, or directory:
+
+```bash
+portless        # runs "dev" script, https://<project>.localhost
+```
+
 ## portless.json
 
-Create an optional `portless.json` to enable zero-arg mode. Your `package.json` scripts stay portless-free:
-
-**portless.json:**
+Use an optional `portless.json` to override defaults:
 
 ```json
 { "name": "myapp" }
 ```
 
-**package.json:**
-
-```json
-{ "scripts": { "dev": "next dev" } }
-```
-
 ```bash
-portless        # reads config, runs "dev" script, https://myapp.localhost
-pnpm dev        # works without portless, plain "next dev"
+portless        # runs "dev" script, https://myapp.localhost
 ```
 
-Without a `portless.json`, the name is inferred from `package.json` and the script defaults to `"dev"`.
+The name is inferred from `package.json` if not set in config. The script defaults to `"dev"`.
 
 ### Fields
 

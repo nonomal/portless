@@ -25,20 +25,14 @@ npm install -D portless
 
 ## Run your app
 
-The simplest way: create a `portless.json` with the app name, then run `portless`:
-
-**portless.json:**
-
-```json
-{ "name": "myapp" }
-```
+Just run `portless`. It reads the `"dev"` script from `package.json` and runs it through the proxy:
 
 ```bash
 portless
-# -> runs "dev" script, https://myapp.localhost
+# -> runs "dev" script, https://<project>.localhost
 ```
 
-Your `package.json` scripts stay portless-free. If someone doesn't have portless installed, `pnpm dev` still works.
+The app name is inferred from `package.json`, git root, or directory name. Use a `portless.json` to override (e.g. `{ "name": "myapp" }` for `https://myapp.localhost`).
 
 You can also run with an explicit command:
 
@@ -53,7 +47,7 @@ The proxy auto-starts when you run an app. A random port (4000--4999) is assigne
 
 ## Use in package.json
 
-With a `portless.json`, your scripts stay clean:
+Your scripts stay clean:
 
 ```json
 {

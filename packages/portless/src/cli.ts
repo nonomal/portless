@@ -1163,8 +1163,8 @@ ${colors.bold("portless run")} - Infer project name and run through the proxy.
 ${colors.bold("Usage:")}
   ${colors.cyan("portless run [options] [command...]")}
 
-  When no command is given and a portless.json exists, runs the configured
-  script (default: "dev") from package.json.
+  When no command is given, runs the configured script (default: "dev")
+  from package.json.
 
 ${colors.bold("Options:")}
   --name <name>          Override the inferred base name (worktree prefix still applies)
@@ -1183,7 +1183,7 @@ ${colors.bold("Name inference (in order):")}
   (e.g. feature-auth.myapp.localhost).
 
 ${colors.bold("Examples:")}
-  portless run                        # With portless.json: run dev script
+  portless run                        # Run dev script through proxy
   portless run next dev               # -> https://<project>.localhost
   portless run --name myapp next dev  # -> https://myapp.localhost
   portless run vite dev               # -> https://<project>.localhost
@@ -1289,9 +1289,9 @@ ${colors.bold("Install:")}
   ${colors.cyan("npm install -D portless")}          Project dev dependency
 
 ${colors.bold("Usage:")}
-  ${colors.cyan("portless")}                         Run dev script through proxy (needs portless.json)
+  ${colors.cyan("portless")}                         Run dev script through proxy
   ${colors.cyan("portless")}                         From monorepo root: run all workspace packages
-  ${colors.cyan("portless run")}                     Same as above (with portless.json or --script)
+  ${colors.cyan("portless run")}                     Same as above
   ${colors.cyan("portless run <cmd>")}               Run a command through the proxy
   ${colors.cyan("portless <name> <cmd>")}            Run with an explicit app name
   ${colors.cyan("portless proxy start")}             Start the proxy (HTTPS on port 443, daemon)
@@ -1306,7 +1306,7 @@ ${colors.bold("Usage:")}
   ${colors.cyan("portless hosts clean")}             Remove portless entries from ${HOSTS_DISPLAY}
 
 ${colors.bold("Examples:")}
-  portless                            # Run dev script (with portless.json)
+  portless                            # Run dev script through proxy
   portless                            # From monorepo root: start all apps
   portless --script start             # Run "start" script instead of "dev"
   portless myapp next dev             # -> https://myapp.localhost
@@ -1315,13 +1315,12 @@ ${colors.bold("Examples:")}
   portless get backend                # -> https://backend.localhost
 
 ${colors.bold("Configuration (portless.json):")}
-  Create a portless.json to enable zero-arg mode. Your package.json
-  scripts stay portless-free. Config is optional; portless infers
-  the name from package.json and defaults to the "dev" script.
+  Optional. Portless works out of the box by running the "dev" script
+  from package.json. Use portless.json to override defaults.
 
-  Single app:  { "name": "myapp" }
-  Custom script: { "name": "myapp", "script": "start" }
-  Monorepo:    { "apps": { "apps/web": { "name": "myapp" } } }
+  Override name:   { "name": "myapp" }
+  Override script: { "name": "myapp", "script": "start" }
+  Monorepo:        { "apps": { "apps/web": { "name": "myapp" } } }
 
 ${colors.bold("In package.json:")}
   {
@@ -1329,8 +1328,8 @@ ${colors.bold("In package.json:")}
       "dev": "next dev"
     }
   }
-  Then run: portless          (with portless.json)
-  Or:       portless run      (with portless.json)
+  Then run: portless
+  Or:       portless run
   Or:       portless run next dev
 
 ${colors.bold("How it works:")}
@@ -2345,15 +2344,16 @@ function loadAppConfig(cwd: string = process.cwd()): AppConfig | null {
  *
  * Activates when:
  * - At a workspace root (pnpm, npm, yarn, or bun) -> multi-app mode
- * - Has a portless.json or --script flag -> single-app mode
- * Without config, bare `portless` still prints help for backwards compat.
+ * - In any directory with a package.json that has the target script -> single-app mode
+ * Config (portless.json / package.json "portless" key) is loaded for overrides
+ * but is not required.
  */
 async function handleDefaultMode(globalScript?: string): Promise<boolean> {
   const cwd = process.cwd();
 
   // Workspace root: multi-app mode, but only when at least one package
   // has the target script. Otherwise fall through to single-app mode so
-  // a workspace root with its own portless.json + dev script still works.
+  // a workspace root with its own dev script still works.
   const wsRoot = findWorkspaceRoot(cwd);
   if (wsRoot === cwd) {
     const packages = discoverWorkspacePackages(cwd);
@@ -2374,10 +2374,7 @@ async function handleDefaultMode(globalScript?: string): Promise<boolean> {
     }
   }
 
-  // Single-app mode requires portless.json or --script to activate.
   const appConfig = loadAppConfig(cwd);
-  if (!appConfig && !globalScript) return false;
-
   const scriptName = globalScript ?? appConfig?.script ?? "dev";
   if (hasScript(scriptName, cwd)) {
     await handleDefaultSingle(cwd, scriptName, appConfig);
@@ -2445,7 +2442,10 @@ async function handleDefaultSingle(
  */
 interface MultiAppEntry {
   pkg: WorkspacePackage;
+  /** Portless hostname (e.g. "web.json-render") */
   name: string;
+  /** Human-readable package label for display (e.g. "web") */
+  label: string;
   commandArgs: string[];
   appPort?: number;
   proxied: boolean;
@@ -2676,11 +2676,13 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     const proxied = appOverride.proxy ?? isServerCommand(rawScript);
 
     let name: string;
+    let label: string;
     if (appOverride.name) {
       name = appOverride.name
         .split(".")
-        .map((label) => truncateLabel(label))
+        .map((l) => truncateLabel(l))
         .join(".");
+      label = appOverride.name;
     } else {
       let pkgLabel: string;
       if (pkg.name) {
@@ -2690,9 +2692,10 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
         pkgLabel = rel.replace(/\//g, "-");
       }
       name = pkgLabel === projectName ? projectName : `${pkgLabel}.${projectName}`;
+      label = pkg.scope ? `@${pkg.scope}/${pkg.name}` : (pkg.name ?? rel);
     }
 
-    apps.push({ pkg, name, commandArgs, appPort: appOverride.appPort, proxied });
+    apps.push({ pkg, name, label, commandArgs, appPort: appOverride.appPort, proxied });
   }
 
   if (apps.length === 0) {
@@ -2700,6 +2703,7 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     process.exit(1);
   }
 
+  apps.sort((a, b) => a.label.localeCompare(b.label));
   const proxiedApps = apps.filter((a) => a.proxied);
   const taskApps = apps.filter((a) => !a.proxied);
 
@@ -2756,12 +2760,12 @@ async function runWithTurbo(
 
   const manifest: Record<string, ManifestEntry> = {};
   const routes: { hostname: string }[] = [];
-  const appUrls: { name: string; url: string }[] = [];
+  const appUrls: { label: string; url: string }[] = [];
 
   for (const app of proxiedApps) {
     const usesPortless = app.commandArgs[0] === "portless";
     if (usesPortless) {
-      appUrls.push({ name: app.name, url: "(managed by portless)" });
+      appUrls.push({ label: app.label, url: "(managed by portless)" });
       continue;
     }
 
@@ -2770,7 +2774,7 @@ async function runWithTurbo(
     const portSuffix =
       (tls && proxyPort === 443) || (!tls && proxyPort === 80) ? "" : `:${proxyPort}`;
     const url = `${protocol}://${app.name}.${tld}${portSuffix}`;
-    appUrls.push({ name: app.name, url });
+    appUrls.push({ label: app.label, url });
 
     const hostname = parseHostname(app.name, tld);
     store.addRoute(hostname, appPort, process.pid);
@@ -2793,17 +2797,19 @@ async function runWithTurbo(
   ensureEnvLoader();
   writeManifest(manifest);
 
-  if (appUrls.length > 0) {
-    const maxName = Math.max(...appUrls.map((a) => a.name.length));
-    for (const { name, url } of appUrls) {
-      const pad = " ".repeat(maxName - name.length);
-      console.log(`  ${chalk.bold(name)}${pad}  ${chalk.cyan(url)}`);
-    }
-  }
-  if (taskApps.length > 0) {
-    console.log("");
-    for (const app of taskApps) {
-      console.log(`  ${chalk.gray(app.name)}  ${chalk.gray(app.commandArgs.join(" "))}`);
+  const allApps = [
+    ...appUrls.map(({ label, url }) => ({ label, url })),
+    ...taskApps.map((app) => ({ label: app.label, url: undefined })),
+  ];
+  if (allApps.length > 0) {
+    const maxLabel = Math.max(...allApps.map((a) => a.label.length));
+    for (const { label, url } of allApps) {
+      const pad = " ".repeat(maxLabel - label.length);
+      if (url) {
+        console.log(`  ${label}${pad}  ${chalk.dim(url)}`);
+      } else {
+        console.log(`  ${chalk.dim(label)}`);
+      }
     }
   }
   console.log("");
@@ -2881,7 +2887,7 @@ async function runWithDirectSpawn(
 ): Promise<void> {
   const children: ReturnType<typeof spawn>[] = [];
   const exitCodes = new Map<string, number | null>();
-  const appUrls: { name: string; url: string; cmd: string }[] = [];
+  const appUrls: { label: string; url: string }[] = [];
   const routeEntries: { store: RouteStore; hostname: string }[] = [];
 
   // Sequential: each spawnProxiedApp calls findFreePort() which binds/releases
@@ -2897,27 +2903,29 @@ async function runWithDirectSpawn(
     );
     children.push(child);
     if (route) routeEntries.push(route);
-    appUrls.push({ name: app.name, url: displayUrl, cmd: app.commandArgs.join(" ") });
+    appUrls.push({ label: app.label, url: displayUrl });
   }
 
-  const taskNames: { name: string; cmd: string }[] = [];
+  const taskLabels: string[] = [];
   for (const app of taskApps) {
     children.push(spawnTaskApp(app, exitCodes));
-    taskNames.push({ name: app.name, cmd: app.commandArgs.join(" ") });
+    taskLabels.push(app.label);
   }
 
   // Print a clean summary after all processes are spawned.
-  if (appUrls.length > 0) {
-    const maxName = Math.max(...appUrls.map((a) => a.name.length));
-    for (const { name, url, cmd } of appUrls) {
-      const pad = " ".repeat(maxName - name.length);
-      console.log(`  ${chalk.bold(name)}${pad}  ${chalk.cyan(url)}  ${chalk.gray(cmd)}`);
-    }
-  }
-  if (taskNames.length > 0) {
-    console.log("");
-    for (const { name, cmd } of taskNames) {
-      console.log(`  ${chalk.gray(name)}  ${chalk.gray(cmd)}`);
+  const allApps = [
+    ...appUrls.map(({ label, url }) => ({ label, url })),
+    ...taskLabels.map((label) => ({ label, url: undefined as string | undefined })),
+  ];
+  if (allApps.length > 0) {
+    const maxLabel = Math.max(...allApps.map((a) => a.label.length));
+    for (const { label, url } of allApps) {
+      const pad = " ".repeat(maxLabel - label.length);
+      if (url) {
+        console.log(`  ${label}${pad}  ${chalk.dim(url)}`);
+      } else {
+        console.log(`  ${chalk.dim(label)}`);
+      }
     }
   }
   console.log("");
@@ -2985,10 +2993,7 @@ async function handleRunMode(args: string[], globalScript?: string): Promise<voi
 
   const appConfig = loadAppConfig();
 
-  // Script/command fallback: only resolve from config when a portless.json
-  // exists or --script was passed. Without config, `portless run` with no
-  // args still errors (backwards compatible).
-  if (parsed.commandArgs.length === 0 && (appConfig || globalScript)) {
+  if (parsed.commandArgs.length === 0) {
     const scriptName = globalScript ?? appConfig?.script ?? "dev";
     const resolved = resolveScriptCommand(scriptName, process.cwd());
     if (resolved) {
@@ -3226,17 +3231,17 @@ async function main() {
     process.env.PORTLESS === "skip";
   if (
     skipPortless &&
-    (isRunCommand || (args.length >= 2 && args[0] !== "proxy" && args[0] !== "clean"))
+    (isRunCommand ||
+      args.length === 0 ||
+      (args.length >= 2 && args[0] !== "proxy" && args[0] !== "clean"))
   ) {
     const parsed = isRunCommand ? parseRunArgs(args) : parseAppArgs(args);
     let commandArgs = parsed.commandArgs;
-    if (commandArgs.length === 0 && isRunCommand) {
+    if (commandArgs.length === 0 && (isRunCommand || args.length === 0)) {
       const appConfig = loadAppConfig();
-      if (appConfig || globalScript) {
-        const scriptName = globalScript ?? appConfig?.script ?? "dev";
-        const resolved = resolveScriptCommand(scriptName, process.cwd());
-        if (resolved) commandArgs = resolved;
-      }
+      const scriptName = globalScript ?? appConfig?.script ?? "dev";
+      const resolved = resolveScriptCommand(scriptName, process.cwd());
+      if (resolved) commandArgs = resolved;
     }
     if (commandArgs.length === 0) {
       console.error(colors.red("Error: No command provided."));

@@ -116,10 +116,16 @@ describe("CLI", () => {
       expect(stdout).toContain("Usage:");
     });
 
-    it("prints help and exits 0 with no args", () => {
-      const { status, stdout } = run([]);
-      expect(status).toBe(0);
-      expect(stdout).toContain("Usage:");
+    it("prints help and exits 0 with no args when no dev script exists", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-cli-help-"));
+      try {
+        fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "test-app" }));
+        const { status, stdout } = run([], { cwd: tmpDir });
+        expect(status).toBe(0);
+        expect(stdout).toContain("Usage:");
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -283,10 +289,16 @@ describe("CLI", () => {
   });
 
   describe("run subcommand dispatch", () => {
-    it("exits 1 with 'No command provided' when no args follow run", () => {
-      const { status, stderr } = run(["run"]);
-      expect(status).toBe(1);
-      expect(stderr).toContain("No command provided");
+    it("exits 1 with 'No command provided' when no args follow run and no dev script", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-cli-run-"));
+      try {
+        fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "test-app" }));
+        const { status, stderr } = run(["run"], { cwd: tmpDir });
+        expect(status).toBe(1);
+        expect(stderr).toContain("No command provided");
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
 
     it("does not dispatch 'list' as the global list command", () => {
@@ -1174,15 +1186,17 @@ describe("CLI", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it("portless (no args) prints help without portless.json", () => {
-      // Create a package.json with dev script but no portless.json
+    it("portless (no args) runs dev script without portless.json", () => {
       fs.writeFileSync(
         path.join(tmpDir, "package.json"),
         JSON.stringify({ name: "test-app", scripts: { dev: "echo hello" } })
       );
-      const { status, stdout } = run([], { cwd: tmpDir });
+      const { status, stdout } = run([], {
+        cwd: tmpDir,
+        env: { PORTLESS: "0" },
+      });
       expect(status).toBe(0);
-      expect(stdout).toContain("Usage:");
+      expect(stdout).toContain("hello");
     });
 
     it("portless run (no command) with portless.json resolves dev script", () => {
@@ -1198,14 +1212,16 @@ describe("CLI", () => {
       expect(stdout).toContain("config-dev");
     });
 
-    it("portless run (no command) without portless.json errors", () => {
+    it("portless run (no command) without portless.json resolves dev script", () => {
       fs.writeFileSync(
         path.join(tmpDir, "package.json"),
         JSON.stringify({ name: "test-app", scripts: { dev: "echo hello" } })
       );
-      const { status, stderr } = run(["run"], { cwd: tmpDir });
-      expect(status).toBe(1);
-      expect(stderr).toContain("No command provided");
+      const { stdout } = run(["run"], {
+        cwd: tmpDir,
+        env: { PORTLESS: "0" },
+      });
+      expect(stdout).toContain("hello");
     });
 
     it("portless run with explicit command ignores config script", () => {

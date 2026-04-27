@@ -40,26 +40,23 @@ In non-interactive environments (no TTY, or `CI=1`), portless exits with a descr
 
 ## Configuration
 
-Create a `portless.json` to enable zero-arg mode. Your `package.json` scripts stay portless-free:
+Bare `portless` works out of the box. It runs the `"dev"` script from `package.json` through the proxy, inferring the app name from the package name, git root, or directory:
 
-**portless.json:**
+```bash
+portless        # -> runs "dev" script, https://<project>.localhost
+```
+
+Use an optional `portless.json` to override defaults:
 
 ```json
 { "name": "myapp" }
 ```
 
-**package.json:**
-
-```json
-{ "scripts": { "dev": "next dev" } }
-```
-
 ```bash
-portless        # -> reads config, runs "dev" script, https://myapp.localhost
-pnpm dev        # -> works without portless, plain "next dev"
+portless        # -> runs "dev" script, https://myapp.localhost
 ```
 
-The name is inferred from `package.json` if not set in config. The script defaults to `"dev"`.
+The script defaults to `"dev"`. The name is inferred from `package.json` if not set in config.
 
 ### Monorepo
 
@@ -282,7 +279,7 @@ LAN mode depends on the system mDNS tools that portless already spawns: macOS sh
 ## Commands
 
 ```bash
-portless                        # With portless.json: run dev script through proxy
+portless                        # Run dev script through proxy
 portless                        # From monorepo root: run all workspace packages
 portless run [--name <name>] [cmd] [args...]  # Infer name, run through proxy
 portless <name> <cmd> [args...]  # Run app at https://<name>.localhost
