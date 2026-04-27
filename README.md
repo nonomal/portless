@@ -63,7 +63,7 @@ The name is inferred from `package.json` if not set in config. The script defaul
 
 ### Monorepo
 
-One `portless.json` at the repo root covers all workspace packages. Portless reads `pnpm-workspace.yaml` to discover packages:
+One `portless.json` at the repo root covers all workspace packages. Portless discovers packages from `pnpm-workspace.yaml`, or the `"workspaces"` field in `package.json` (npm, yarn, bun):
 
 ```json
 {

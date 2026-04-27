@@ -6,7 +6,7 @@
 portless
 ```
 
-With a `portless.json` in the current directory, runs the configured script (default: `"dev"`) through the proxy. From a monorepo root (with `pnpm-workspace.yaml`), starts all workspace packages that have the target script.
+With a `portless.json` in the current directory, runs the configured script (default: `"dev"`) through the proxy. From a monorepo root (detected via `pnpm-workspace.yaml` or `package.json` `"workspaces"`), starts all workspace packages that have the target script.
 
 ```bash
 portless                      # single app (with portless.json)

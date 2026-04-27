@@ -10,20 +10,28 @@ export interface WorkspacePackage {
   scripts: Record<string, string>;
 }
 
+export type WorkspaceSource = "pnpm" | "package-json";
+
 /**
- * Walk up from `cwd` looking for pnpm-workspace.yaml.
- * Returns the directory containing it, or null.
+ * Walk up from `cwd` looking for a workspace root.
+ * Checks `pnpm-workspace.yaml` first, then `package.json` with a
+ * `"workspaces"` field (npm, yarn, bun). Returns the directory and
+ * the source type, or null if no workspace root is found.
  */
 export function findWorkspaceRoot(cwd: string = process.cwd()): string | null {
   let dir = cwd;
   for (;;) {
-    const wsPath = path.join(dir, "pnpm-workspace.yaml");
     try {
-      fs.accessSync(wsPath, fs.constants.R_OK);
+      fs.accessSync(path.join(dir, "pnpm-workspace.yaml"), fs.constants.R_OK);
       return dir;
     } catch {
       // not here
     }
+
+    if (readWorkspacesFromPackageJson(dir) !== null) {
+      return dir;
+    }
+
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -31,19 +39,70 @@ export function findWorkspaceRoot(cwd: string = process.cwd()): string | null {
 }
 
 /**
- * Discover all workspace packages from pnpm-workspace.yaml at `workspaceRoot`.
+ * Determine the workspace source at a given root directory.
+ * Prefers pnpm-workspace.yaml over package.json workspaces.
+ */
+function detectWorkspaceSource(workspaceRoot: string): WorkspaceSource | null {
+  try {
+    fs.accessSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), fs.constants.R_OK);
+    return "pnpm";
+  } catch {
+    // not pnpm
+  }
+  if (readWorkspacesFromPackageJson(workspaceRoot) !== null) {
+    return "package-json";
+  }
+  return null;
+}
+
+/**
+ * Read the `"workspaces"` field from package.json in `dir`.
+ * Supports both array form (`["apps/*"]`) and yarn-classic object
+ * form (`{ "packages": ["apps/*"] }`). Returns null if not found.
+ */
+export function readWorkspacesFromPackageJson(dir: string): string[] | null {
+  const pkgPath = path.join(dir, "package.json");
+  try {
+    const raw = fs.readFileSync(pkgPath, "utf-8");
+    const pkg = JSON.parse(raw);
+    if (!pkg || typeof pkg !== "object") return null;
+    const ws = pkg.workspaces;
+    if (Array.isArray(ws)) {
+      return ws.filter((g: unknown) => typeof g === "string");
+    }
+    if (ws && typeof ws === "object" && !Array.isArray(ws) && Array.isArray(ws.packages)) {
+      return ws.packages.filter((g: unknown) => typeof g === "string");
+    }
+  } catch {
+    // missing or unparseable
+  }
+  return null;
+}
+
+/**
+ * Discover all workspace packages at `workspaceRoot`.
+ * Supports pnpm (pnpm-workspace.yaml) and npm/yarn/bun (package.json workspaces).
  * Returns packages that have a package.json (ignoring dirs without one).
  */
 export function discoverWorkspacePackages(workspaceRoot: string): WorkspacePackage[] {
-  const wsPath = path.join(workspaceRoot, "pnpm-workspace.yaml");
-  let content: string;
-  try {
-    content = fs.readFileSync(wsPath, "utf-8");
-  } catch {
+  const source = detectWorkspaceSource(workspaceRoot);
+  let globs: string[];
+
+  if (source === "pnpm") {
+    const wsPath = path.join(workspaceRoot, "pnpm-workspace.yaml");
+    let content: string;
+    try {
+      content = fs.readFileSync(wsPath, "utf-8");
+    } catch {
+      return [];
+    }
+    globs = parsePnpmWorkspaceYaml(content);
+  } else if (source === "package-json") {
+    globs = readWorkspacesFromPackageJson(workspaceRoot) ?? [];
+  } else {
     return [];
   }
 
-  const globs = parsePnpmWorkspaceYaml(content);
   const dirs = expandPackageGlobs(workspaceRoot, globs);
   const packages: WorkspacePackage[] = [];
 

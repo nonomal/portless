@@ -12,6 +12,7 @@ import {
   splitCommand,
   isServerCommand,
   loadPackagePortlessConfig,
+  ConfigValidationError,
 } from "./config.js";
 
 function createTmpDir(): string {
@@ -219,79 +220,47 @@ describe("loadConfig validation", () => {
     cleanupDir(tmpDir);
   });
 
-  it("exits on invalid JSON", () => {
+  it("throws on invalid JSON", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), "not json");
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
-  it("exits when config is an array", () => {
+  it("throws when config is an array", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), "[]");
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
-  it("exits when name is a number", () => {
+  it("throws when name is a number", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ name: 42 }));
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
-  it("exits when name is empty string", () => {
+  it("throws when name is empty string", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ name: "" }));
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
-  it("exits when appPort is out of range", () => {
+  it("throws when appPort is out of range", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ appPort: 99999 }));
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
-  it("exits when appPort is a string", () => {
+  it("throws when appPort is a string", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ appPort: "3000" }));
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
-  it("exits when apps entry is not an object", () => {
+  it("throws when apps entry is not an object", () => {
     fs.writeFileSync(
       path.join(tmpDir, "portless.json"),
       JSON.stringify({ apps: { "apps/web": "bad" } })
     );
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 
-  it("exits when proxy is not a boolean", () => {
+  it("throws when proxy is not a boolean", () => {
     fs.writeFileSync(path.join(tmpDir, "portless.json"), JSON.stringify({ proxy: "false" }));
-    const mockExit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw new Error("process.exit");
-    });
-    expect(() => loadConfig(tmpDir)).toThrow("process.exit");
-    mockExit.mockRestore();
+    expect(() => loadConfig(tmpDir)).toThrow(ConfigValidationError);
   });
 });
 
@@ -627,6 +596,3 @@ describe("resolveScriptCommand", () => {
     expect(resolveScriptCommand("dev", tmpDir)).toEqual(["yarn", "run", "dev"]);
   });
 });
-
-// Vitest provides vi globally
-import { vi } from "vitest";

@@ -72,7 +72,7 @@ Each `apps` entry has the same shape (`name`, `script`, `appPort`, `proxy`). Whe
 
 ### Monorepo
 
-For pnpm workspaces, one `portless.json` at the repo root covers all packages. Portless reads `pnpm-workspace.yaml` to discover them:
+One `portless.json` at the repo root covers all workspace packages. Portless discovers packages from `pnpm-workspace.yaml`, or the `"workspaces"` field in `package.json` (npm, yarn, bun):
 
 ```json
 {

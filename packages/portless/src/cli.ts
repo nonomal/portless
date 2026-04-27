@@ -70,6 +70,7 @@ import {
   hasScript,
   isServerCommand,
   loadPackagePortlessConfig,
+  ConfigValidationError,
 } from "./config.js";
 import type { AppConfig } from "./config.js";
 import { findWorkspaceRoot, discoverWorkspacePackages } from "./workspace.js";
@@ -768,28 +769,14 @@ type EnsureProxyResult =
   | { started: false; skipped: true }
   | { started: false; skipped?: false };
 
-/**
- * Check if the proxy is running and auto-start it if needed.
- * Returns the discovered state after start, or `{ skipped: true }` when the
- * user chose to skip, or `{ started: false }` when the proxy was already up.
- *
- * When `onSkip` is provided and the user chooses "skip", calls `onSkip`
- * and returns `{ skipped: true }`. Pass null to disable the skip option.
- */
-async function ensureProxyRunning(
-  proxyPort: number,
-  tls: boolean,
-  lanMode: boolean,
-  onSkip: (() => void) | null
-): Promise<EnsureProxyResult> {
-  let envTld: string;
-  try {
-    envTld = getDefaultTld();
-  } catch (err) {
-    console.error(colors.red(`Error: ${(err as Error).message}`));
-    process.exit(1);
-  }
+interface ProxyDesiredState {
+  explicit: ProxyConfigExplicitness;
+  desiredConfig: ReturnType<typeof resolveProxyConfig>;
+  envTld: string;
+}
 
+function resolveProxyDesiredState(lanMode: boolean): ProxyDesiredState {
+  const envTld = getDefaultTld();
   const explicit: ProxyConfigExplicitness = {
     useHttps: process.env.PORTLESS_HTTPS !== undefined,
     customCert: false,
@@ -810,6 +797,24 @@ async function ensureProxyRunning(
     tld: envTld,
     useWildcard: isWildcardEnvEnabled(),
   });
+  return { explicit, desiredConfig, envTld };
+}
+
+/**
+ * Check if the proxy is running and auto-start it if needed.
+ * Returns the discovered state after start, or `{ skipped: true }` when the
+ * user chose to skip, or `{ started: false }` when the proxy was already up.
+ *
+ * When `onSkip` is provided and the user chooses "skip", calls `onSkip`
+ * and returns `{ skipped: true }`. Pass null to disable the skip option.
+ */
+async function ensureProxyRunning(
+  proxyPort: number,
+  tls: boolean,
+  desired: ProxyDesiredState,
+  onSkip: (() => void) | null
+): Promise<EnsureProxyResult> {
+  const { explicit, desiredConfig } = desired;
 
   const proxyResponsive = await isProxyRunning(proxyPort, tls);
   const proxyListeningFromStateDir =
@@ -947,9 +952,9 @@ async function runApp(
   let store = initialStore;
   console.log(chalk.blue.bold(`\nportless\n`));
 
-  let envTld: string;
+  let desired: ProxyDesiredState;
   try {
-    envTld = getDefaultTld();
+    desired = resolveProxyDesiredState(lanMode);
   } catch (err) {
     console.error(colors.red(`Error: ${(err as Error).message}`));
     process.exit(1);
@@ -958,7 +963,7 @@ async function runApp(
   // Validate the hostname before we try to auto-start the proxy.
   parseHostname(name, tld);
 
-  const ensureResult = await ensureProxyRunning(proxyPort, tls, lanMode, () => {
+  const ensureResult = await ensureProxyRunning(proxyPort, tls, desired, () => {
     console.log(colors.gray("Skipping proxy, running command directly...\n"));
     spawnCommand(commandArgs);
   });
@@ -980,30 +985,13 @@ async function runApp(
   } else {
     const runningConfig = readCurrentProxyConfig(stateDir);
 
-    const explicit: ProxyConfigExplicitness = {
-      useHttps: process.env.PORTLESS_HTTPS !== undefined,
-      customCert: false,
-      lanMode: process.env.PORTLESS_LAN !== undefined,
-      lanIp: process.env.PORTLESS_LAN_IP !== undefined,
-      tld: process.env.PORTLESS_TLD !== undefined,
-      useWildcard: process.env.PORTLESS_WILDCARD !== undefined,
-    };
-    const desiredConfig = resolveProxyConfig({
-      persistedLanMode: lanMode,
-      explicit,
-      defaultTld: envTld,
-      useHttps: !isHttpsEnvDisabled(),
-      customCertPath: null,
-      customKeyPath: null,
-      lanMode: isLanEnvEnabled(),
-      lanIp: process.env.PORTLESS_LAN_IP || null,
-      tld: envTld,
-      useWildcard: isWildcardEnvEnabled(),
-    });
-
-    const mismatchMessages = getProxyConfigMismatchMessages(desiredConfig, runningConfig, explicit);
+    const mismatchMessages = getProxyConfigMismatchMessages(
+      desired.desiredConfig,
+      runningConfig,
+      desired.explicit
+    );
     if (mismatchMessages.length > 0) {
-      printProxyConfigMismatch(proxyPort, desiredConfig, mismatchMessages);
+      printProxyConfigMismatch(proxyPort, desired.desiredConfig, mismatchMessages);
     }
     lanMode = runningConfig.lanMode;
     lanIp = runningConfig.lanIp;
@@ -1014,10 +1002,10 @@ async function runApp(
   // (e.g. --lan changes tld from "localhost" to "local")
   const hostname = parseHostname(name, tld);
 
-  if (envTld !== DEFAULT_TLD && envTld !== tld) {
+  if (desired.envTld !== DEFAULT_TLD && desired.envTld !== tld) {
     console.warn(
       chalk.yellow(
-        `Warning: PORTLESS_TLD=${envTld} but the running proxy uses .${tld}. Using .${tld}.`
+        `Warning: PORTLESS_TLD=${desired.envTld} but the running proxy uses .${tld}. Using .${tld}.`
       )
     );
   }
@@ -2361,9 +2349,17 @@ ${colors.bold("LAN mode (--lan):")}
  * Handles both single-app (top-level fields) and monorepo (apps map) configs.
  */
 function loadAppConfig(cwd: string = process.cwd()): AppConfig | null {
-  const loaded = loadConfig(cwd);
-  if (!loaded) return null;
-  return resolveAppConfig(loaded.config, loaded.configDir, cwd);
+  try {
+    const loaded = loadConfig(cwd);
+    if (!loaded) return null;
+    return resolveAppConfig(loaded.config, loaded.configDir, cwd);
+  } catch (err) {
+    if (err instanceof ConfigValidationError) {
+      console.error(colors.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -2371,7 +2367,7 @@ function loadAppConfig(cwd: string = process.cwd()): AppConfig | null {
  * Returns true if handled, false to fall through to help text.
  *
  * Activates when:
- * - At a workspace root (has pnpm-workspace.yaml in cwd) -> multi-app mode
+ * - At a workspace root (pnpm, npm, yarn, or bun) -> multi-app mode
  * - Has a portless.json or --script flag -> single-app mode
  * Without config, bare `portless` still prints help for backwards compat.
  */
@@ -2462,35 +2458,43 @@ interface MultiAppEntry {
   proxied: boolean;
 }
 
-function spawnShellCommand(
-  commandStr: string,
+function spawnChildProcess(
+  commandArgs: string[],
   env: Record<string, string | undefined>,
   cwd: string
 ): ReturnType<typeof spawn> {
-  return isWindows
-    ? spawn("cmd.exe", ["/d", "/s", "/c", commandStr], {
-        stdio: ["ignore", "pipe", "pipe"],
-        env,
-        cwd,
-      })
-    : spawn("/bin/sh", ["-c", commandStr], {
-        stdio: ["ignore", "pipe", "pipe"],
-        env,
-        cwd,
-      });
+  return spawn(commandArgs[0], commandArgs.slice(1), {
+    stdio: ["ignore", "pipe", "pipe"],
+    env,
+    cwd,
+  });
+}
+
+function prefixStream(
+  stream: NodeJS.ReadableStream | null,
+  output: NodeJS.WritableStream,
+  prefix: string
+): void {
+  if (!stream) return;
+  let buffer = "";
+  stream.on("data", (data: Buffer) => {
+    buffer += data.toString();
+    let idx: number;
+    while ((idx = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      if (line) output.write(`${prefix} ${line}\n`);
+    }
+  });
+  stream.on("end", () => {
+    if (buffer) output.write(`${prefix} ${buffer}\n`);
+    buffer = "";
+  });
 }
 
 function pipeOutput(child: ReturnType<typeof spawn>, prefix: string): void {
-  child.stdout?.on("data", (data: Buffer) => {
-    for (const line of data.toString().split("\n")) {
-      if (line) process.stdout.write(`${prefix} ${line}\n`);
-    }
-  });
-  child.stderr?.on("data", (data: Buffer) => {
-    for (const line of data.toString().split("\n")) {
-      if (line) process.stderr.write(`${prefix} ${line}\n`);
-    }
-  });
+  prefixStream(child.stdout, process.stdout, prefix);
+  prefixStream(child.stderr, process.stderr, prefix);
 }
 
 async function spawnProxiedApp(
@@ -2498,9 +2502,10 @@ async function spawnProxiedApp(
   stateDir: string,
   proxyPort: number,
   tls: boolean,
-  tld: string
+  tld: string,
+  exitCodes: Map<string, number | null>
 ): Promise<ReturnType<typeof spawn>> {
-  const commandStr = app.commandArgs.join(" ");
+  const displayStr = app.commandArgs.join(" ");
   const usesPortless = app.commandArgs[0] === "portless";
 
   const pkgEnv: Record<string, string | undefined> = { ...process.env };
@@ -2547,15 +2552,21 @@ async function spawnProxiedApp(
   console.log(
     chalk.cyan(`  ${app.name}`),
     chalk.gray(`-> ${displayUrl}`),
-    chalk.gray(`(${commandStr})`)
+    chalk.gray(`(${displayStr})`)
   );
 
-  const child = spawnShellCommand(commandStr, env, app.pkg.dir);
+  const child = spawnChildProcess(app.commandArgs, env, app.pkg.dir);
   pipeOutput(child, chalk.cyan(`[${app.name}]`));
 
   const capturedStore = store;
   const capturedHostname = hostname;
-  child.on("exit", () => {
+  child.on("exit", (code, signal) => {
+    exitCodes.set(app.name, code);
+    if (code !== 0 && code !== null) {
+      console.error(colors.red(`[${app.name}] exited with code ${code}`));
+    } else if (signal) {
+      console.error(colors.yellow(`[${app.name}] killed by ${signal}`));
+    }
     if (capturedStore && capturedHostname) {
       try {
         capturedStore.removeRoute(capturedHostname);
@@ -2568,21 +2579,42 @@ async function spawnProxiedApp(
   return child;
 }
 
-function spawnTaskApp(app: MultiAppEntry): ReturnType<typeof spawn> {
-  const commandStr = app.commandArgs.join(" ");
+function spawnTaskApp(
+  app: MultiAppEntry,
+  exitCodes: Map<string, number | null>
+): ReturnType<typeof spawn> {
+  const displayStr = app.commandArgs.join(" ");
   const pkgEnv: Record<string, string | undefined> = { ...process.env };
   pkgEnv.PATH = augmentedPath(pkgEnv, app.pkg.dir);
 
-  console.log(chalk.gray(`  ${app.name}`), chalk.gray(`(${commandStr})`));
+  console.log(chalk.gray(`  ${app.name}`), chalk.gray(`(${displayStr})`));
 
-  const child = spawnShellCommand(commandStr, pkgEnv, app.pkg.dir);
+  const child = spawnChildProcess(app.commandArgs, pkgEnv, app.pkg.dir);
   pipeOutput(child, chalk.gray(`[${app.name}]`));
+
+  child.on("exit", (code, signal) => {
+    exitCodes.set(app.name, code);
+    if (code !== 0 && code !== null) {
+      console.error(colors.red(`[${app.name}] exited with code ${code}`));
+    } else if (signal) {
+      console.error(colors.yellow(`[${app.name}] killed by ${signal}`));
+    }
+  });
 
   return child;
 }
 
 async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promise<void> {
-  const loaded = loadConfig(wsRoot);
+  let loaded: ReturnType<typeof loadConfig>;
+  try {
+    loaded = loadConfig(wsRoot);
+  } catch (err) {
+    if (err instanceof ConfigValidationError) {
+      console.error(colors.red(`Error: ${err.message}`));
+      process.exit(1);
+    }
+    throw err;
+  }
   const packages = discoverWorkspacePackages(wsRoot);
 
   if (packages.length === 0) {
@@ -2678,7 +2710,14 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   let { dir, port, tls, tld } = await discoverState();
 
   if (proxiedApps.length > 0) {
-    const ensureResult = await ensureProxyRunning(port, tls, false, null);
+    let multiDesired: ProxyDesiredState;
+    try {
+      multiDesired = resolveProxyDesiredState(false);
+    } catch (err) {
+      console.error(colors.red(`Error: ${(err as Error).message}`));
+      process.exit(1);
+    }
+    const ensureResult = await ensureProxyRunning(port, tls, multiDesired, null);
     if (ensureResult.started) {
       dir = ensureResult.state.dir;
       port = ensureResult.state.port;
@@ -2692,18 +2731,19 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   }
 
   const children: ReturnType<typeof spawn>[] = [];
+  const exitCodes = new Map<string, number | null>();
 
   // Sequential: each spawnProxiedApp calls findFreePort() which binds/releases
   // a port, so parallel spawning could cause port collisions.
   for (const app of proxiedApps) {
-    children.push(await spawnProxiedApp(app, dir, port, tls, tld));
+    children.push(await spawnProxiedApp(app, dir, port, tls, tld, exitCodes));
   }
 
   if (taskApps.length > 0) {
     console.log(chalk.gray(`\n  Tasks:\n`));
   }
   for (const app of taskApps) {
-    children.push(spawnTaskApp(app));
+    children.push(spawnTaskApp(app, exitCodes));
   }
 
   console.log("");
@@ -2721,7 +2761,6 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   process.on("SIGINT", cleanup);
   process.on("SIGTERM", cleanup);
 
-  // Wait for all children to exit
   await Promise.all(
     children.map(
       (child) =>
@@ -2730,6 +2769,16 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
         })
     )
   );
+
+  const failed = [...exitCodes.entries()].filter(([, code]) => code !== 0 && code !== null);
+  if (failed.length > 0) {
+    console.error(
+      colors.red(
+        `\n${failed.length} app${failed.length === 1 ? "" : "s"} exited with errors: ${failed.map(([name, code]) => `${name} (${code})`).join(", ")}`
+      )
+    );
+    process.exit(1);
+  }
 }
 
 async function handleRunMode(args: string[], globalScript?: string): Promise<void> {

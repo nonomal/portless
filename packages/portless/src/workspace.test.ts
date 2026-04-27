@@ -7,6 +7,7 @@ import {
   discoverWorkspacePackages,
   parsePnpmWorkspaceYaml,
   expandPackageGlobs,
+  readWorkspacesFromPackageJson,
 } from "./workspace.js";
 
 function createTmpDir(): string {
@@ -129,6 +130,51 @@ describe("expandPackageGlobs", () => {
   });
 });
 
+describe("readWorkspacesFromPackageJson", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = createTmpDir();
+  });
+
+  afterEach(() => {
+    cleanupDir(tmpDir);
+  });
+
+  it("reads array-form workspaces", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ workspaces: ["apps/*", "packages/*"] })
+    );
+    expect(readWorkspacesFromPackageJson(tmpDir)).toEqual(["apps/*", "packages/*"]);
+  });
+
+  it("reads yarn-classic object form", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ workspaces: { packages: ["apps/*", "packages/*"] } })
+    );
+    expect(readWorkspacesFromPackageJson(tmpDir)).toEqual(["apps/*", "packages/*"]);
+  });
+
+  it("returns null when no workspaces field", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "test" }));
+    expect(readWorkspacesFromPackageJson(tmpDir)).toBeNull();
+  });
+
+  it("returns null when no package.json", () => {
+    expect(readWorkspacesFromPackageJson(tmpDir)).toBeNull();
+  });
+
+  it("filters non-string entries", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ workspaces: ["apps/*", 42, null, "packages/*"] })
+    );
+    expect(readWorkspacesFromPackageJson(tmpDir)).toEqual(["apps/*", "packages/*"]);
+  });
+});
+
 describe("findWorkspaceRoot", () => {
   let tmpDir: string;
 
@@ -152,7 +198,33 @@ describe("findWorkspaceRoot", () => {
     expect(findWorkspaceRoot(subDir)).toBe(tmpDir);
   });
 
-  it("returns null when no pnpm-workspace.yaml exists", () => {
+  it("returns null when no workspace root exists", () => {
+    expect(findWorkspaceRoot(tmpDir)).toBeNull();
+  });
+
+  it("finds package.json workspaces in cwd", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+    expect(findWorkspaceRoot(tmpDir)).toBe(tmpDir);
+  });
+
+  it("walks up to find package.json workspaces", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+    const subDir = path.join(tmpDir, "apps", "web");
+    fs.mkdirSync(subDir, { recursive: true });
+    expect(findWorkspaceRoot(subDir)).toBe(tmpDir);
+  });
+
+  it("prefers pnpm-workspace.yaml over package.json workspaces", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - pnpm-apps/*\n");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ workspaces: ["npm-apps/*"] })
+    );
+    expect(findWorkspaceRoot(tmpDir)).toBe(tmpDir);
+  });
+
+  it("ignores package.json without workspaces field", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "test" }));
     expect(findWorkspaceRoot(tmpDir)).toBeNull();
   });
 });
@@ -253,7 +325,67 @@ describe("discoverWorkspacePackages", () => {
     expect(names).toEqual(["api", "shared", "web"]);
   });
 
-  it("returns empty when pnpm-workspace.yaml is missing", () => {
+  it("returns empty when no workspace config exists", () => {
     expect(discoverWorkspacePackages(tmpDir)).toEqual([]);
+  });
+
+  it("discovers packages from package.json workspaces (npm/yarn/bun)", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+    const webDir = path.join(tmpDir, "apps", "web");
+    fs.mkdirSync(webDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(webDir, "package.json"),
+      JSON.stringify({ name: "@myorg/web", scripts: { dev: "next dev" } })
+    );
+
+    const packages = discoverWorkspacePackages(tmpDir);
+    expect(packages).toHaveLength(1);
+    expect(packages[0].name).toBe("web");
+    expect(packages[0].scope).toBe("myorg");
+    expect(packages[0].dir).toBe(webDir);
+  });
+
+  it("discovers packages from yarn-classic object workspaces", () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ workspaces: { packages: ["apps/*", "packages/*"] } })
+    );
+    for (const dir of ["apps/web", "packages/shared"]) {
+      const full = path.join(tmpDir, dir);
+      fs.mkdirSync(full, { recursive: true });
+      fs.writeFileSync(
+        path.join(full, "package.json"),
+        JSON.stringify({ name: path.basename(dir), scripts: { dev: "echo dev" } })
+      );
+    }
+
+    const packages = discoverWorkspacePackages(tmpDir);
+    expect(packages).toHaveLength(2);
+    const names = packages.map((p) => p.name).sort();
+    expect(names).toEqual(["shared", "web"]);
+  });
+
+  it("prefers pnpm-workspace.yaml over package.json workspaces", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ workspaces: ["packages/*"] })
+    );
+    const webDir = path.join(tmpDir, "apps", "web");
+    fs.mkdirSync(webDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(webDir, "package.json"),
+      JSON.stringify({ name: "web", scripts: { dev: "echo dev" } })
+    );
+    const sharedDir = path.join(tmpDir, "packages", "shared");
+    fs.mkdirSync(sharedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sharedDir, "package.json"),
+      JSON.stringify({ name: "shared", scripts: { dev: "echo dev" } })
+    );
+
+    const packages = discoverWorkspacePackages(tmpDir);
+    expect(packages).toHaveLength(1);
+    expect(packages[0].name).toBe("web");
   });
 });

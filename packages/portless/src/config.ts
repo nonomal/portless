@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import colors from "./colors.js";
+
+export class ConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConfigValidationError";
+  }
+}
 
 export interface AppConfig {
   name?: string;
@@ -37,8 +43,7 @@ export function loadConfig(cwd: string = process.cwd()): LoadedConfig | null {
       return loadConfigFromPackageJson(cwd);
     }
     if (err instanceof SyntaxError) {
-      console.error(colors.red(`Error: Invalid JSON in ${configPath}`));
-      process.exit(1);
+      throw new ConfigValidationError(`Invalid JSON in ${configPath}`);
     }
     throw err;
   }
@@ -290,23 +295,20 @@ function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
 
 function validateConfig(config: unknown, configPath: string): asserts config is PortlessConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
-    console.error(colors.red(`Error: ${configPath} must be a JSON object.`));
-    process.exit(1);
+    throw new ConfigValidationError(`${configPath} must be a JSON object.`);
   }
 
   const obj = config as Record<string, unknown>;
 
   if (obj.name !== undefined) {
     if (typeof obj.name !== "string" || !obj.name.trim()) {
-      console.error(colors.red(`Error: "name" in ${configPath} must be a non-empty string.`));
-      process.exit(1);
+      throw new ConfigValidationError(`"name" in ${configPath} must be a non-empty string.`);
     }
   }
 
   if (obj.script !== undefined) {
     if (typeof obj.script !== "string" || !obj.script.trim()) {
-      console.error(colors.red(`Error: "script" in ${configPath} must be a non-empty string.`));
-      process.exit(1);
+      throw new ConfigValidationError(`"script" in ${configPath} must be a non-empty string.`);
     }
   }
 
@@ -317,29 +319,25 @@ function validateConfig(config: unknown, configPath: string): asserts config is 
       obj.appPort < 1 ||
       obj.appPort > 65535
     ) {
-      console.error(
-        colors.red(`Error: "appPort" in ${configPath} must be an integer between 1 and 65535.`)
+      throw new ConfigValidationError(
+        `"appPort" in ${configPath} must be an integer between 1 and 65535.`
       );
-      process.exit(1);
     }
   }
 
   if (obj.proxy !== undefined) {
     if (typeof obj.proxy !== "boolean") {
-      console.error(colors.red(`Error: "proxy" in ${configPath} must be a boolean.`));
-      process.exit(1);
+      throw new ConfigValidationError(`"proxy" in ${configPath} must be a boolean.`);
     }
   }
 
   if (obj.apps !== undefined) {
     if (typeof obj.apps !== "object" || obj.apps === null || Array.isArray(obj.apps)) {
-      console.error(colors.red(`Error: "apps" in ${configPath} must be an object.`));
-      process.exit(1);
+      throw new ConfigValidationError(`"apps" in ${configPath} must be an object.`);
     }
     for (const [key, value] of Object.entries(obj.apps as Record<string, unknown>)) {
       if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        console.error(colors.red(`Error: "apps.${key}" in ${configPath} must be an object.`));
-        process.exit(1);
+        throw new ConfigValidationError(`"apps.${key}" in ${configPath} must be an object.`);
       }
       validateAppConfig(value as Record<string, unknown>, `apps.${key}`, configPath);
     }
@@ -349,18 +347,16 @@ function validateConfig(config: unknown, configPath: string): asserts config is 
 function validateAppConfig(obj: Record<string, unknown>, prefix: string, configPath: string): void {
   if (obj.name !== undefined) {
     if (typeof obj.name !== "string" || !obj.name.trim()) {
-      console.error(
-        colors.red(`Error: "${prefix}.name" in ${configPath} must be a non-empty string.`)
+      throw new ConfigValidationError(
+        `"${prefix}.name" in ${configPath} must be a non-empty string.`
       );
-      process.exit(1);
     }
   }
   if (obj.script !== undefined) {
     if (typeof obj.script !== "string" || !obj.script.trim()) {
-      console.error(
-        colors.red(`Error: "${prefix}.script" in ${configPath} must be a non-empty string.`)
+      throw new ConfigValidationError(
+        `"${prefix}.script" in ${configPath} must be a non-empty string.`
       );
-      process.exit(1);
     }
   }
   if (obj.appPort !== undefined) {
@@ -370,18 +366,14 @@ function validateAppConfig(obj: Record<string, unknown>, prefix: string, configP
       obj.appPort < 1 ||
       obj.appPort > 65535
     ) {
-      console.error(
-        colors.red(
-          `Error: "${prefix}.appPort" in ${configPath} must be an integer between 1 and 65535.`
-        )
+      throw new ConfigValidationError(
+        `"${prefix}.appPort" in ${configPath} must be an integer between 1 and 65535.`
       );
-      process.exit(1);
     }
   }
   if (obj.proxy !== undefined) {
     if (typeof obj.proxy !== "boolean") {
-      console.error(colors.red(`Error: "${prefix}.proxy" in ${configPath} must be a boolean.`));
-      process.exit(1);
+      throw new ConfigValidationError(`"${prefix}.proxy" in ${configPath} must be a boolean.`);
     }
   }
 }

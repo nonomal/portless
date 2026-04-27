@@ -77,9 +77,9 @@ pnpm dev        # -> works without portless, plain "next dev"
 
 Without a `portless.json`, the name is inferred from `package.json`. The script defaults to `"dev"`.
 
-### Monorepo (pnpm workspace)
+### Monorepo
 
-One `portless.json` at the repo root. Portless reads `pnpm-workspace.yaml` to discover packages:
+One `portless.json` at the repo root. Portless discovers packages from `pnpm-workspace.yaml`, or the `"workspaces"` field in `package.json` (npm, yarn, bun):
 
 ```json
 {
