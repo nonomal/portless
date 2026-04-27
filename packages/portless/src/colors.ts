@@ -16,9 +16,9 @@ const identity = (s: string) => s;
 const bold = wrap("1", "22");
 const dim = wrap("2", "22");
 
-const red = bold;
+const red = wrap("31", "39");
 const green = identity;
-const yellow = dim;
+const yellow = wrap("33", "39");
 const blue = Object.assign(identity, { bold } as { bold: (s: string) => string });
 const cyan = Object.assign(identity, { bold } as { bold: (s: string) => string });
 const white = identity;
