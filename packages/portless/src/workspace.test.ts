@@ -180,11 +180,12 @@ describe("discoverWorkspacePackages", () => {
     const packages = discoverWorkspacePackages(tmpDir);
     expect(packages).toHaveLength(1);
     expect(packages[0].name).toBe("web");
+    expect(packages[0].scope).toBe("myorg");
     expect(packages[0].scripts.dev).toBe("next dev");
     expect(packages[0].dir).toBe(webDir);
   });
 
-  it("strips @scope/ from package names", () => {
+  it("strips @scope/ from package names and preserves scope", () => {
     fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
     const webDir = path.join(tmpDir, "apps", "web");
     fs.mkdirSync(webDir, { recursive: true });
@@ -195,6 +196,7 @@ describe("discoverWorkspacePackages", () => {
 
     const packages = discoverWorkspacePackages(tmpDir);
     expect(packages[0].name).toBe("web-app");
+    expect(packages[0].scope).toBe("company");
   });
 
   it("handles packages without a name field", () => {
@@ -208,6 +210,18 @@ describe("discoverWorkspacePackages", () => {
 
     const packages = discoverWorkspacePackages(tmpDir);
     expect(packages[0].name).toBeNull();
+    expect(packages[0].scope).toBeNull();
+  });
+
+  it("handles unscoped package names", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
+    const webDir = path.join(tmpDir, "apps", "web");
+    fs.mkdirSync(webDir, { recursive: true });
+    fs.writeFileSync(path.join(webDir, "package.json"), JSON.stringify({ name: "my-app" }));
+
+    const packages = discoverWorkspacePackages(tmpDir);
+    expect(packages[0].name).toBe("my-app");
+    expect(packages[0].scope).toBeNull();
   });
 
   it("skips directories without package.json", () => {

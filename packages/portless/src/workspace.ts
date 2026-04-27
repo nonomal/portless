@@ -3,7 +3,10 @@ import * as path from "node:path";
 
 export interface WorkspacePackage {
   dir: string;
+  /** Package name with scope stripped (e.g., `@org/web` → `web`). */
   name: string | null;
+  /** Npm scope without the `@` prefix (e.g., `@og-sdk/web` → `og-sdk`). Null if unscoped. */
+  scope: string | null;
   scripts: Record<string, string>;
 }
 
@@ -49,9 +52,12 @@ export function discoverWorkspacePackages(workspaceRoot: string): WorkspacePacka
     try {
       const raw = fs.readFileSync(pkgPath, "utf-8");
       const pkg = JSON.parse(raw);
-      const name = typeof pkg.name === "string" ? pkg.name.replace(/^@[^/]+\//, "") : null;
+      const rawName = typeof pkg.name === "string" ? pkg.name : null;
+      const scopeMatch = rawName?.match(/^@([^/]+)\//);
+      const scope = scopeMatch ? scopeMatch[1] : null;
+      const name = rawName ? rawName.replace(/^@[^/]+\//, "") : null;
       const scripts = typeof pkg.scripts === "object" && pkg.scripts !== null ? pkg.scripts : {};
-      packages.push({ dir, name, scripts });
+      packages.push({ dir, name, scope, scripts });
     } catch {
       // no package.json or invalid; skip
     }

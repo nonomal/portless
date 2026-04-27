@@ -2399,6 +2399,23 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
 
   const scriptName = globalScript ?? loaded?.config.script ?? "dev";
 
+  // Infer the monorepo project name for use as the base domain.
+  // Config name > common npm scope > workspace root inference.
+  let projectName: string;
+  if (loaded?.config.name) {
+    projectName = loaded.config.name
+      .split(".")
+      .map((label) => truncateLabel(label))
+      .join(".");
+  } else {
+    const commonScope = packages.find((p) => p.scope)?.scope;
+    if (commonScope) {
+      projectName = sanitizeForHostname(commonScope) || inferProjectName(wsRoot).name;
+    } else {
+      projectName = inferProjectName(wsRoot).name;
+    }
+  }
+
   interface AppEntry {
     pkg: WorkspacePackage;
     name: string;
@@ -2424,11 +2441,15 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
         .split(".")
         .map((label) => truncateLabel(label))
         .join(".");
-    } else if (pkg.name) {
-      const sanitized = sanitizeForHostname(pkg.name);
-      name = sanitized || rel.replace(/\//g, "-");
     } else {
-      name = rel.replace(/\//g, "-");
+      let pkgLabel: string;
+      if (pkg.name) {
+        const sanitized = sanitizeForHostname(pkg.name);
+        pkgLabel = sanitized || rel.replace(/\//g, "-");
+      } else {
+        pkgLabel = rel.replace(/\//g, "-");
+      }
+      name = `${pkgLabel}.${projectName}`;
     }
 
     apps.push({ pkg, name, commandArgs: resolved, appPort: appOverride?.appPort });
