@@ -2470,37 +2470,50 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   const children: ReturnType<typeof spawn>[] = [];
 
   for (const app of apps) {
-    const store = new RouteStore(dir, {
-      onWarning: (msg) => console.warn(colors.yellow(`[${app.name}] ${msg}`)),
-    });
+    const commandStr = app.commandArgs.join(" ");
+    const usesPortless = app.commandArgs[0] === "portless";
 
-    const appPort = app.appPort ?? (await findFreePort());
-    const protocol = tls ? "https" : "http";
-    const portSuffix = (tls && port === 443) || (!tls && port === 80) ? "" : `:${port}`;
-    const url = `${protocol}://${app.name}.${tld}${portSuffix}`;
+    let env: Record<string, string | undefined>;
+    let store: RouteStore | null = null;
+    let hostname: string | null = null;
+    let displayUrl: string;
 
-    const hostname = parseHostname(app.name, tld);
+    if (usesPortless) {
+      // Script already invokes portless — let it handle its own routing.
+      env = { ...process.env };
+      displayUrl = "(managed by portless)";
+    } else {
+      store = new RouteStore(dir, {
+        onWarning: (msg) => console.warn(colors.yellow(`[${app.name}] ${msg}`)),
+      });
 
-    store.addRoute(hostname, appPort, process.pid);
+      const appPort = app.appPort ?? (await findFreePort());
+      const protocol = tls ? "https" : "http";
+      const portSuffix = (tls && port === 443) || (!tls && port === 80) ? "" : `:${port}`;
+      const url = `${protocol}://${app.name}.${tld}${portSuffix}`;
+      displayUrl = url;
 
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      PORT: String(appPort),
-      HOST: "127.0.0.1",
-      PORTLESS_URL: url,
-    };
+      hostname = parseHostname(app.name, tld);
+      store.addRoute(hostname, appPort, process.pid);
 
-    if (tls) {
-      const caPath = path.join(dir, "ca.pem");
-      if (fs.existsSync(caPath)) {
-        env.NODE_EXTRA_CA_CERTS = caPath;
+      env = {
+        ...process.env,
+        PORT: String(appPort),
+        HOST: "127.0.0.1",
+        PORTLESS_URL: url,
+      };
+
+      if (tls) {
+        const caPath = path.join(dir, "ca.pem");
+        if (fs.existsSync(caPath)) {
+          env.NODE_EXTRA_CA_CERTS = caPath;
+        }
       }
     }
 
-    const commandStr = app.commandArgs.join(" ");
     console.log(
       chalk.cyan(`  ${app.name}`),
-      chalk.gray(`-> ${url}`),
+      chalk.gray(`-> ${displayUrl}`),
       chalk.gray(`(${commandStr})`)
     );
 
@@ -2530,11 +2543,15 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
       }
     });
 
+    const capturedStore = store;
+    const capturedHostname = hostname;
     child.on("exit", () => {
-      try {
-        store.removeRoute(hostname);
-      } catch {
-        // non-fatal
+      if (capturedStore && capturedHostname) {
+        try {
+          capturedStore.removeRoute(capturedHostname);
+        } catch {
+          // non-fatal
+        }
       }
     });
 
