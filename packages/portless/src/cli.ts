@@ -2348,7 +2348,10 @@ function loadAppConfig(cwd: string = process.cwd()): AppConfig | null {
  * Config (portless.json / package.json "portless" key) is loaded for overrides
  * but is not required.
  */
-async function handleDefaultMode(globalScript?: string): Promise<boolean> {
+async function handleDefaultMode(
+  globalScript?: string,
+  extraArgs: string[] = []
+): Promise<boolean> {
   const cwd = process.cwd();
 
   // Workspace root: multi-app mode, but only when at least one package
@@ -2369,7 +2372,7 @@ async function handleDefaultMode(globalScript?: string): Promise<boolean> {
     }
     const hasMatchingPackages = packages.some((p) => p.scripts[wsScriptName]);
     if (hasMatchingPackages) {
-      await handleDefaultMulti(cwd, globalScript);
+      await handleDefaultMulti(cwd, globalScript, extraArgs);
       return true;
     }
   }
@@ -2593,7 +2596,11 @@ function spawnTaskApp(
   return child;
 }
 
-async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promise<void> {
+async function handleDefaultMulti(
+  wsRoot: string,
+  globalScript?: string,
+  extraArgs: string[] = []
+): Promise<void> {
   let loaded: ReturnType<typeof loadConfig>;
   try {
     loaded = loadConfig(wsRoot);
@@ -2738,7 +2745,7 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
   const useTurbo = loaded?.config.turbo !== false && hasTurboConfig(wsRoot);
 
   if (useTurbo) {
-    await runWithTurbo(wsRoot, dir, port, tls, tld, scriptName, proxiedApps, taskApps);
+    await runWithTurbo(wsRoot, dir, port, tls, tld, scriptName, proxiedApps, taskApps, extraArgs);
   } else {
     await runWithDirectSpawn(dir, port, tls, tld, proxiedApps, taskApps);
   }
@@ -2752,7 +2759,8 @@ async function runWithTurbo(
   tld: string,
   scriptName: string,
   proxiedApps: MultiAppEntry[],
-  taskApps: MultiAppEntry[]
+  taskApps: MultiAppEntry[],
+  extraArgs: string[] = []
 ): Promise<void> {
   const store = new RouteStore(stateDir, {
     onWarning: (msg: string) => console.warn(colors.yellow(msg)),
@@ -2797,30 +2805,24 @@ async function runWithTurbo(
   ensureEnvLoader();
   writeManifest(manifest);
 
-  const allApps = [
-    ...appUrls.map(({ label, url }) => ({ label, url })),
-    ...taskApps.map((app) => ({ label: app.label, url: undefined })),
-  ];
-  if (allApps.length > 0) {
-    const maxLabel = Math.max(...allApps.map((a) => a.label.length));
-    for (const { label, url } of allApps) {
+  if (appUrls.length > 0) {
+    const maxLabel = Math.max(...appUrls.map((a) => a.label.length));
+    for (const { label, url } of appUrls) {
       const pad = " ".repeat(maxLabel - label.length);
-      if (url) {
-        console.log(`  ${label}${pad}  ${chalk.dim(url)}`);
-      } else {
-        console.log(`  ${chalk.dim(label)}`);
-      }
+      console.log(`  ${label}${pad}  ${chalk.dim(url)}`);
     }
   }
   console.log("");
 
   const pm = detectPackageManager(wsRoot);
-  const turboArgs =
-    pm === "npm"
-      ? ["npx", "turbo", "run", scriptName]
+  const useRootScript = hasScript(scriptName, wsRoot);
+  const turboArgs = useRootScript
+    ? [pm, "run", scriptName, ...extraArgs]
+    : pm === "npm"
+      ? ["npx", "turbo", "run", scriptName, ...extraArgs]
       : pm === "bun"
-        ? ["bunx", "turbo", "run", scriptName]
-        : [pm, "exec", "turbo", "run", scriptName];
+        ? ["bunx", "turbo", "run", scriptName, ...extraArgs]
+        : [pm, "exec", "turbo", "run", scriptName, ...extraArgs];
 
   const turboChild = spawn(turboArgs[0], turboArgs.slice(1), {
     stdio: "inherit",
@@ -2913,19 +2915,11 @@ async function runWithDirectSpawn(
   }
 
   // Print a clean summary after all processes are spawned.
-  const allApps = [
-    ...appUrls.map(({ label, url }) => ({ label, url })),
-    ...taskLabels.map((label) => ({ label, url: undefined as string | undefined })),
-  ];
-  if (allApps.length > 0) {
-    const maxLabel = Math.max(...allApps.map((a) => a.label.length));
-    for (const { label, url } of allApps) {
+  if (appUrls.length > 0) {
+    const maxLabel = Math.max(...appUrls.map((a) => a.label.length));
+    for (const { label, url } of appUrls) {
       const pad = " ".repeat(maxLabel - label.length);
-      if (url) {
-        console.log(`  ${label}${pad}  ${chalk.dim(url)}`);
-      } else {
-        console.log(`  ${chalk.dim(label)}`);
-      }
+      console.log(`  ${label}${pad}  ${chalk.dim(url)}`);
     }
   }
   console.log("");
@@ -3259,8 +3253,9 @@ async function main() {
       printHelp();
       return;
     }
-    if (args.length === 0) {
-      const handled = await handleDefaultMode(globalScript);
+    if (args.length === 0 || args[0] === "--") {
+      const extraArgs = args[0] === "--" ? args.slice(1) : [];
+      const handled = await handleDefaultMode(globalScript, extraArgs);
       if (handled) return;
       printHelp();
       return;
