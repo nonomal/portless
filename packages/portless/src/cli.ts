@@ -948,6 +948,9 @@ async function runApp(
     store = new RouteStore(stateDir, {
       onWarning: (msg: string) => console.warn(colors.yellow(msg)),
     });
+    if (tls && !isCATrusted(stateDir)) {
+      await handleTrust();
+    }
   } else {
     const runningConfig = readCurrentProxyConfig(stateDir);
 
@@ -2708,6 +2711,10 @@ async function handleDefaultMulti(wsRoot: string, globalScript?: string): Promis
     } else {
       // Proxy was already running; re-discover to pick up current state.
       ({ dir, port, tls, tld } = await discoverState());
+    }
+
+    if (tls && !isCATrusted(dir)) {
+      await handleTrust();
     }
   }
 
