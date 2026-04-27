@@ -157,6 +157,14 @@ describe("buildNodeOptions", () => {
     const result = buildNodeOptions(tmpDir);
     expect(result).toBe(`--require ${loaderPath(tmpDir)} --max-old-space-size=4096`);
   });
+
+  it("quotes the loader path when it contains spaces", () => {
+    delete process.env.NODE_OPTIONS;
+    const spacedDir = path.join(tmpDir, "path with spaces");
+    fs.mkdirSync(spacedDir, { recursive: true });
+    const result = buildNodeOptions(spacedDir);
+    expect(result).toBe(`--require "${loaderPath(spacedDir)}"`);
+  });
 });
 
 describe("loaderSource", () => {
@@ -168,7 +176,10 @@ describe("loaderSource", () => {
 
   it("escapes backslashes for Windows paths", () => {
     const source = loaderSource("C:\\Users\\test\\.portless");
-    expect(source).not.toContain("C:\\Users\\test\\.portless");
     expect(source).toContain("dev-manifest.json");
+    // JSON.stringify produces doubled backslashes in the JS source text.
+    // Verify exactly doubled (not quadrupled from a redundant manual escape).
+    expect(source).toContain("C:\\\\Users\\\\test\\\\.portless");
+    expect(source).not.toContain("C:\\\\\\\\Users");
   });
 });

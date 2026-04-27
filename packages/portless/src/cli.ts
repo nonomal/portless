@@ -2475,7 +2475,7 @@ function prefixStream(
     buffer += decoder.write(data);
     let idx: number;
     while ((idx = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, idx);
+      const line = buffer.slice(0, idx).replace(/\r$/, "");
       buffer = buffer.slice(idx + 1);
       output.write(`${prefix} ${line}\n`);
     }
@@ -2498,7 +2498,11 @@ async function spawnProxiedApp(
   tls: boolean,
   tld: string,
   exitCodes: Map<string, number | null>
-): Promise<{ child: ReturnType<typeof spawn>; displayUrl: string }> {
+): Promise<{
+  child: ReturnType<typeof spawn>;
+  displayUrl: string;
+  route: { store: RouteStore; hostname: string } | null;
+}> {
   const usesPortless = app.commandArgs[0] === "portless";
 
   const pkgEnv: Record<string, string | undefined> = { ...process.env };
@@ -2563,7 +2567,8 @@ async function spawnProxiedApp(
     }
   });
 
-  return { child, displayUrl };
+  const route = store && hostname ? { store, hostname } : null;
+  return { child, displayUrl, route };
 }
 
 function spawnTaskApp(
@@ -2822,7 +2827,11 @@ async function runWithTurbo(
 
   const SIGKILL_TIMEOUT_MS = 5_000;
 
+  let cleanedUp = false;
   const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+
     try {
       turboChild.kill("SIGTERM");
     } catch {
@@ -2873,11 +2882,12 @@ async function runWithDirectSpawn(
   const children: ReturnType<typeof spawn>[] = [];
   const exitCodes = new Map<string, number | null>();
   const appUrls: { name: string; url: string; cmd: string }[] = [];
+  const routeEntries: { store: RouteStore; hostname: string }[] = [];
 
   // Sequential: each spawnProxiedApp calls findFreePort() which binds/releases
   // a port, so parallel spawning could cause port collisions.
   for (const app of proxiedApps) {
-    const { child, displayUrl } = await spawnProxiedApp(
+    const { child, displayUrl, route } = await spawnProxiedApp(
       app,
       stateDir,
       proxyPort,
@@ -2886,6 +2896,7 @@ async function runWithDirectSpawn(
       exitCodes
     );
     children.push(child);
+    if (route) routeEntries.push(route);
     appUrls.push({ name: app.name, url: displayUrl, cmd: app.commandArgs.join(" ") });
   }
 
@@ -2913,7 +2924,11 @@ async function runWithDirectSpawn(
 
   const SIGKILL_TIMEOUT_MS = 5_000;
 
+  let cleanedUp = false;
   const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+
     for (const child of children) {
       try {
         child.kill("SIGTERM");
@@ -2932,6 +2947,14 @@ async function runWithDirectSpawn(
         }
       }
     }, SIGKILL_TIMEOUT_MS).unref();
+
+    for (const { store, hostname } of routeEntries) {
+      try {
+        store.removeRoute(hostname);
+      } catch {
+        // non-fatal
+      }
+    }
   };
 
   process.on("SIGINT", cleanup);

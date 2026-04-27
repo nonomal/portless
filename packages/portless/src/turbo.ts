@@ -18,11 +18,10 @@ export function manifestPath(baseDir: string = USER_STATE_DIR): string {
  * relative to the given base directory at runtime.
  */
 export function loaderSource(baseDir: string = USER_STATE_DIR): string {
-  const escaped = baseDir.replace(/\\/g, "\\\\");
   return `"use strict";
 var fs = require("fs");
 var path = require("path");
-var manifestPath = path.join(${JSON.stringify(escaped)}, "dev-manifest.json");
+var manifestPath = path.join(${JSON.stringify(baseDir)}, "dev-manifest.json");
 try {
   var raw = fs.readFileSync(manifestPath, "utf-8");
   var manifest = JSON.parse(raw);
@@ -87,7 +86,8 @@ export function removeManifest(baseDir: string = USER_STATE_DIR): void {
  */
 export function buildNodeOptions(baseDir: string = USER_STATE_DIR): string {
   const existing = process.env.NODE_OPTIONS || "";
-  const requireFlag = `--require ${loaderPath(baseDir)}`;
+  const lp = loaderPath(baseDir);
+  const requireFlag = lp.includes(" ") ? `--require "${lp}"` : `--require ${lp}`;
   return existing ? `${requireFlag} ${existing}` : requireFlag;
 }
 
