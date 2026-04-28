@@ -1,8 +1,23 @@
 # Changelog
 
-## 0.11.0
+## 0.11.1
 
 <!-- release:start -->
+
+### New Features
+
+- **`portless prune` command**: Safety net to find and kill orphaned dev servers left behind by dead CLI sessions. Reads stale route entries, checks if something is still listening on each port, and terminates the orphan.
+
+### Bug Fixes
+
+- **Zombie process orphaning on CLI crash**: Spawn child processes with `detached:true` on Unix so they get their own process group. Signal handlers now kill the entire group instead of just the immediate child, preventing orphaned dev servers from surviving CLI crashes or `kill -9`.
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.11.0
 
 ### New Features
 
@@ -29,7 +44,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.10.3
 
