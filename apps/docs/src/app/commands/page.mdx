@@ -117,6 +117,15 @@ portless clean
 
 Stops the proxy if it is running, removes the portless CA from the OS trust store when portless installed it, deletes allowlisted files under `~/.portless`, the system state directory, and `PORTLESS_STATE_DIR` when set, and removes the portless block from `/etc/hosts`. May prompt for elevated privileges. Custom `--cert` / `--key` paths are not removed.
 
+## Prune orphans
+
+```bash
+portless prune
+portless prune --force
+```
+
+Finds and kills orphaned dev server processes left behind by crashed portless sessions. When the CLI is killed with `kill -9` or crashes, child dev servers may survive and continue holding their ports. This command checks routes whose owning process is dead but whose port is still in use, terminates the orphans, and removes the stale route entries. Use `--force` to send SIGKILL instead of SIGTERM.
+
 ## Proxy control
 
 ### Start

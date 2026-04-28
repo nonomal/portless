@@ -289,6 +289,7 @@ portless alias --remove <name>   # Remove a static route
 portless list                    # Show active routes
 portless trust                   # Add local CA to system trust store
 portless clean                   # Remove state, CA trust entry, and hosts block
+portless prune                   # Kill orphaned dev servers from crashed sessions
 portless hosts sync              # Add routes to /etc/hosts (fixes Safari)
 portless hosts clean             # Remove portless entries from /etc/hosts
 
@@ -344,7 +345,7 @@ PORTLESS_URL                     Public URL (e.g. https://myapp.localhost)
 NODE_EXTRA_CA_CERTS              Path to the portless CA (when HTTPS is active)
 ```
 
-> **Reserved names:** `run`, `get`, `alias`, `hosts`, `list`, `trust`, `clean`, and `proxy` are subcommands and cannot be used as app names directly. Use `portless run <cmd>` to infer the name from your project, or `portless --name <name> <cmd>` to force any name including reserved ones.
+> **Reserved names:** `run`, `get`, `alias`, `hosts`, `list`, `trust`, `clean`, `prune`, and `proxy` are subcommands and cannot be used as app names directly. Use `portless run <cmd>` to infer the name from your project, or `portless --name <name> <cmd>` to force any name including reserved ones.
 
 ## Uninstall / reset
 

@@ -235,6 +235,8 @@ LAN mode depends on the system mDNS helpers that portless launches: macOS includ
 | `portless list`                        | Show active routes                                             |
 | `portless trust`                       | Add local CA to system trust store (for HTTPS)                 |
 | `portless clean`                       | Remove state, CA trust entry, and /etc/hosts block             |
+| `portless prune`                       | Kill orphaned dev servers from crashed sessions                |
+| `portless prune --force`               | Kill orphans with SIGKILL instead of SIGTERM                   |
 | `portless proxy start`                 | Start HTTPS proxy as a daemon (port 443, auto-elevates)        |
 | `portless proxy start --no-tls`        | Start without HTTPS (plain HTTP on port 80)                    |
 | `portless proxy start --lan`           | Start in LAN mode (mDNS `.local`, auto-follows LAN IP changes) |
@@ -256,7 +258,7 @@ LAN mode depends on the system mDNS helpers that portless launches: macOS includ
 | `portless run --help`                  | Show help for a subcommand (also: alias, hosts, clean)         |
 | `portless --version` / `-v`            | Show version                                                   |
 
-**Reserved names:** `run`, `get`, `alias`, `hosts`, `list`, `trust`, `clean`, and `proxy` are subcommands and cannot be used as app names directly. Use `portless run <cmd>` to infer the name, or `portless --name <name> <cmd>` to force any name including reserved ones.
+**Reserved names:** `run`, `get`, `alias`, `hosts`, `list`, `trust`, `clean`, `prune`, and `proxy` are subcommands and cannot be used as app names directly. Use `portless run <cmd>` to infer the name, or `portless --name <name> <cmd>` to force any name including reserved ones.
 
 ## portless.json
 
