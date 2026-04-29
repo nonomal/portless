@@ -5,6 +5,8 @@ const TAILSCALE_BINARY = "tailscale";
 /**
  * Port allocation sequence for tailscale serve HTTPS ports.
  * First app gets 443 (default HTTPS), subsequent apps get 8443+.
+ * Ports beyond this list are auto-assigned sequentially but may require
+ * Tailscale ACL configuration to be reachable on the tailnet.
  */
 const PREFERRED_PORTS = [443, 8443, 8444, 8445, 8446, 8447, 8448, 8449, 8450];
 
@@ -187,143 +189,123 @@ export function findAvailableServePort(usedPorts: Set<number>): number {
 function isConflictError(stderr: string, stdout: string): boolean {
   const text = `${stderr}\n${stdout}`.toLowerCase();
   return (
-    text.includes("already") ||
-    text.includes("exists") ||
-    text.includes("conflict") ||
-    text.includes("in use")
+    text.includes("already in use") ||
+    text.includes("already exists") ||
+    text.includes("port conflict") ||
+    text.includes("address already")
   );
 }
+
+export type TailscaleMode = "serve" | "funnel";
 
 export interface RegisterServeOptions {
   runner?: TailscaleCommandRunner;
 }
 
-/**
- * Register a `tailscale serve` mapping: HTTPS on `httpsPort` proxying to
- * `http://127.0.0.1:<localPort>`. Uses `--bg` so it persists until removed.
- */
+const CONFLICT_MESSAGES: Record<TailscaleMode, string> = {
+  serve: "Stop the existing serve or let portless auto-assign a different port.",
+  funnel: "Tailscale Funnel supports ports 443, 8443, and 10000.",
+};
+
+function register(
+  mode: TailscaleMode,
+  localPort: number,
+  httpsPort: number,
+  runner: TailscaleCommandRunner
+): void {
+  const target = `http://127.0.0.1:${localPort}`;
+  const result = runner([mode, "--bg", "--yes", `--https=${httpsPort}`, target]);
+  if (result.error) {
+    const errno = result.error as NodeJS.ErrnoException;
+    if (errno.code === "ENOENT") {
+      throw new Error(
+        "Tailscale CLI not found. Install Tailscale (https://tailscale.com/download) and ensure `tailscale` is on PATH."
+      );
+    }
+    throw new Error(`Failed to register tailscale ${mode}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    if (isConflictError(result.stderr, result.stdout)) {
+      throw new Error(
+        `Tailscale ${mode === "funnel" ? "Funnel " : ""}HTTPS port ${httpsPort} is already in use. ` +
+          CONFLICT_MESSAGES[mode]
+      );
+    }
+    const details = normalizeSpace(result.stderr || result.stdout);
+    throw new Error(
+      `Failed to register tailscale ${mode} on port ${httpsPort}: ${details || "unknown tailscale error"}`
+    );
+  }
+}
+
+function unregister(
+  mode: TailscaleMode,
+  httpsPort: number,
+  options?: { ignoreMissing?: boolean; runner?: TailscaleCommandRunner }
+): void {
+  const runner = options?.runner ?? defaultRunner;
+  const result = runner([mode, "--yes", `--https=${httpsPort}`, "off"]);
+  if (result.error) {
+    const errno = result.error as NodeJS.ErrnoException;
+    if (errno.code === "ENOENT") return;
+    throw new Error(`Failed to remove tailscale ${mode}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
+    const looksLikeMissing =
+      text.includes("not found") ||
+      text.includes("no serve config") ||
+      text.includes("nothing to remove") ||
+      text.includes("does not exist");
+    if (options?.ignoreMissing && looksLikeMissing) return;
+    const details = normalizeSpace(result.stderr || result.stdout);
+    throw new Error(
+      `Failed to remove tailscale ${mode} on port ${httpsPort}: ${details || "unknown tailscale error"}`
+    );
+  }
+}
+
 export function registerServe(
   localPort: number,
   httpsPort: number,
   options?: RegisterServeOptions
 ): void {
-  const runner = options?.runner ?? defaultRunner;
-  const target = `http://127.0.0.1:${localPort}`;
-  const result = runner(["serve", "--bg", "--yes", `--https=${httpsPort}`, target]);
-  if (result.error) {
-    const errno = result.error as NodeJS.ErrnoException;
-    if (errno.code === "ENOENT") {
-      throw new Error(
-        "Tailscale CLI not found. Install Tailscale (https://tailscale.com/download) and ensure `tailscale` is on PATH."
-      );
-    }
-    throw new Error(`Failed to register tailscale serve: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    if (isConflictError(result.stderr, result.stdout)) {
-      throw new Error(
-        `Tailscale HTTPS port ${httpsPort} is already in use. ` +
-          "Stop the existing serve or let portless auto-assign a different port."
-      );
-    }
-    const details = normalizeSpace(result.stderr || result.stdout);
-    throw new Error(
-      `Failed to register tailscale serve on port ${httpsPort}: ${details || "unknown tailscale error"}`
-    );
-  }
+  register("serve", localPort, httpsPort, options?.runner ?? defaultRunner);
 }
 
-/**
- * Remove a `tailscale serve` mapping on the given HTTPS port.
- */
-export function unregisterServe(
-  httpsPort: number,
-  options?: { ignoreMissing?: boolean; runner?: TailscaleCommandRunner }
-): void {
-  const runner = options?.runner ?? defaultRunner;
-  const result = runner(["serve", "--yes", `--https=${httpsPort}`, "off"]);
-  if (result.error) {
-    const errno = result.error as NodeJS.ErrnoException;
-    if (errno.code === "ENOENT") return;
-    throw new Error(`Failed to remove tailscale serve: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
-    const looksLikeMissing =
-      text.includes("not found") ||
-      text.includes("no serve config") ||
-      text.includes("nothing to remove") ||
-      text.includes("does not exist");
-    if (options?.ignoreMissing && looksLikeMissing) return;
-    const details = normalizeSpace(result.stderr || result.stdout);
-    throw new Error(
-      `Failed to remove tailscale serve on port ${httpsPort}: ${details || "unknown tailscale error"}`
-    );
-  }
-}
-
-/**
- * Register a `tailscale funnel` mapping: HTTPS on `httpsPort` proxying to
- * `http://127.0.0.1:<localPort>`. Exposes the service to the public internet.
- */
 export function registerFunnel(
   localPort: number,
   httpsPort: number,
   options?: RegisterServeOptions
 ): void {
-  const runner = options?.runner ?? defaultRunner;
-  const target = `http://127.0.0.1:${localPort}`;
-  const result = runner(["funnel", "--bg", "--yes", `--https=${httpsPort}`, target]);
-  if (result.error) {
-    const errno = result.error as NodeJS.ErrnoException;
-    if (errno.code === "ENOENT") {
-      throw new Error(
-        "Tailscale CLI not found. Install Tailscale (https://tailscale.com/download) and ensure `tailscale` is on PATH."
-      );
-    }
-    throw new Error(`Failed to register tailscale funnel: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    if (isConflictError(result.stderr, result.stdout)) {
-      throw new Error(
-        `Tailscale Funnel HTTPS port ${httpsPort} is already in use. ` +
-          "Tailscale Funnel supports ports 443, 8443, and 10000."
-      );
-    }
-    const details = normalizeSpace(result.stderr || result.stdout);
-    throw new Error(
-      `Failed to register tailscale funnel on port ${httpsPort}: ${details || "unknown tailscale error"}`
-    );
-  }
+  register("funnel", localPort, httpsPort, options?.runner ?? defaultRunner);
 }
 
-/**
- * Remove a `tailscale funnel` mapping on the given HTTPS port.
- */
+export function unregisterServe(
+  httpsPort: number,
+  options?: { ignoreMissing?: boolean; runner?: TailscaleCommandRunner }
+): void {
+  unregister("serve", httpsPort, options);
+}
+
 export function unregisterFunnel(
   httpsPort: number,
   options?: { ignoreMissing?: boolean; runner?: TailscaleCommandRunner }
 ): void {
-  const runner = options?.runner ?? defaultRunner;
-  const result = runner(["funnel", "--yes", `--https=${httpsPort}`, "off"]);
-  if (result.error) {
-    const errno = result.error as NodeJS.ErrnoException;
-    if (errno.code === "ENOENT") return;
-    throw new Error(`Failed to remove tailscale funnel: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
-    const looksLikeMissing =
-      text.includes("not found") ||
-      text.includes("no serve config") ||
-      text.includes("nothing to remove") ||
-      text.includes("does not exist");
-    if (options?.ignoreMissing && looksLikeMissing) return;
-    const details = normalizeSpace(result.stderr || result.stdout);
-    throw new Error(
-      `Failed to remove tailscale funnel on port ${httpsPort}: ${details || "unknown tailscale error"}`
-    );
-  }
+  unregister("funnel", httpsPort, options);
+}
+
+/**
+ * Best-effort cleanup of a tailscale serve or funnel registration from a
+ * route's metadata. Picks the right subcommand based on `tailscaleFunnel`.
+ */
+export function unregisterTailscale(route: {
+  tailscaleHttpsPort?: number;
+  tailscaleFunnel?: boolean;
+}): void {
+  if (!route.tailscaleHttpsPort) return;
+  const mode: TailscaleMode = route.tailscaleFunnel ? "funnel" : "serve";
+  unregister(mode, route.tailscaleHttpsPort, { ignoreMissing: true });
 }
 
 // ---------------------------------------------------------------------------

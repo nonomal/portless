@@ -8,6 +8,7 @@ import {
   registerServe,
   unregisterFunnel,
   unregisterServe,
+  unregisterTailscale,
   type TailscaleCommandRunner,
 } from "./tailscale.js";
 
@@ -345,6 +346,34 @@ describe("tailscale", () => {
         },
       });
       expect(() => unregisterFunnel(8443, { ignoreMissing: true, runner })).not.toThrow();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // unregisterTailscale
+  // -----------------------------------------------------------------------
+
+  describe("unregisterTailscale", () => {
+    it("calls serve off for non-funnel route", () => {
+      const calls: string[][] = [];
+      const runner = createRunner({ "serve --yes --https=443 off": { status: 0 } }, calls);
+      unregisterServe(443, { runner });
+      expect(calls[0]).toEqual(["serve", "--yes", "--https=443", "off"]);
+    });
+
+    it("calls funnel off for funnel route", () => {
+      const calls: string[][] = [];
+      const runner = createRunner({ "funnel --yes --https=8443 off": { status: 0 } }, calls);
+      unregisterFunnel(8443, { runner });
+      expect(calls[0]).toEqual(["funnel", "--yes", "--https=8443", "off"]);
+    });
+
+    it("is a no-op when tailscaleHttpsPort is undefined", () => {
+      expect(() => unregisterTailscale({})).not.toThrow();
+    });
+
+    it("is a no-op when tailscaleHttpsPort is missing", () => {
+      expect(() => unregisterTailscale({ tailscaleFunnel: true })).not.toThrow();
     });
   });
 

@@ -19,8 +19,7 @@ import {
   getUsedServePorts,
   registerFunnel,
   registerServe,
-  unregisterFunnel,
-  unregisterServe,
+  unregisterTailscale,
 } from "./tailscale.js";
 import {
   inferProjectName,
@@ -951,9 +950,11 @@ async function runApp(
 
   // Check tailscale readiness early, before auto-starting the proxy.
   // No point starting the proxy if tailscale will fail afterward.
-  const wantsTailscale =
-    process.env.PORTLESS_TAILSCALE === "1" || process.env.PORTLESS_TAILSCALE === "true";
   const wantsFunnel = process.env.PORTLESS_FUNNEL === "1" || process.env.PORTLESS_FUNNEL === "true";
+  const wantsTailscale =
+    wantsFunnel ||
+    process.env.PORTLESS_TAILSCALE === "1" ||
+    process.env.PORTLESS_TAILSCALE === "true";
   let tsBaseUrl: string | undefined;
 
   if (wantsTailscale) {
@@ -1075,22 +1076,29 @@ async function runApp(
   let tailscaleUrl: string | undefined;
 
   if (wantsTailscale && tsBaseUrl) {
-    const usedPorts = getUsedServePorts();
-    tailscaleHttpsPort = findAvailableServePort(usedPorts);
-
-    try {
-      if (wantsFunnel) {
-        registerFunnel(port, tailscaleHttpsPort);
-      } else {
-        registerServe(port, tailscaleHttpsPort);
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const usedPorts = getUsedServePorts();
+      tailscaleHttpsPort = findAvailableServePort(usedPorts);
+      try {
+        if (wantsFunnel) {
+          registerFunnel(port, tailscaleHttpsPort);
+        } else {
+          registerServe(port, tailscaleHttpsPort);
+        }
+        break;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        const isConflict = message.includes("already in use");
+        if (isConflict && attempt < maxAttempts) continue;
+        console.error(colors.red(`Error: ${message}`));
+        process.exit(1);
       }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(colors.red(`Error: ${message}`));
-      process.exit(1);
     }
 
-    tailscaleUrl = formatTailscaleUrl(tsBaseUrl, tailscaleHttpsPort);
+    // tailscaleHttpsPort is always assigned: the loop either breaks after
+    // a successful register or exits the process on final failure.
+    tailscaleUrl = formatTailscaleUrl(tsBaseUrl, tailscaleHttpsPort!);
     const label = wantsFunnel ? "Funnel (public)" : "Tailscale";
     console.log(chalk.green(`  ${label} -> ${tailscaleUrl}`));
     if (wantsFunnel) {
@@ -1169,16 +1177,13 @@ async function runApp(
       ...caEnv,
     },
     onCleanup: () => {
-      if (tailscaleHttpsPort !== undefined) {
-        try {
-          if (wantsFunnel) {
-            unregisterFunnel(tailscaleHttpsPort, { ignoreMissing: true });
-          } else {
-            unregisterServe(tailscaleHttpsPort, { ignoreMissing: true });
-          }
-        } catch {
-          // Best-effort cleanup; non-fatal
-        }
+      try {
+        unregisterTailscale({
+          tailscaleHttpsPort,
+          tailscaleFunnel: wantsFunnel || undefined,
+        });
+      } catch {
+        // Best-effort cleanup; non-fatal
       }
       try {
         store.removeRoute(hostname);
@@ -1230,6 +1235,19 @@ function appPortFromEnv(): number | undefined {
     process.exit(1);
   }
   return port;
+}
+
+function applyTailscaleFlag(flag: string): boolean {
+  if (flag === "--tailscale") {
+    process.env.PORTLESS_TAILSCALE = "1";
+    return true;
+  }
+  if (flag === "--funnel") {
+    process.env.PORTLESS_FUNNEL = "1";
+    process.env.PORTLESS_TAILSCALE = "1";
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1296,11 +1314,8 @@ ${colors.bold("Examples:")}
         process.exit(1);
       }
       name = args[i];
-    } else if (args[i] === "--tailscale") {
-      process.env.PORTLESS_TAILSCALE = "1";
-    } else if (args[i] === "--funnel") {
-      process.env.PORTLESS_FUNNEL = "1";
-      process.env.PORTLESS_TAILSCALE = "1";
+    } else if (applyTailscaleFlag(args[i])) {
+      // handled
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
       console.error(
@@ -1338,11 +1353,8 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
     } else if (args[i] === "--app-port") {
       i++;
       appPort = parseAppPort(args[i]);
-    } else if (args[i] === "--tailscale") {
-      process.env.PORTLESS_TAILSCALE = "1";
-    } else if (args[i] === "--funnel") {
-      process.env.PORTLESS_FUNNEL = "1";
-      process.env.PORTLESS_TAILSCALE = "1";
+    } else if (applyTailscaleFlag(args[i])) {
+      // handled
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
       console.error(colors.blue("Known flags: --force, --app-port, --tailscale, --funnel"));
@@ -1365,11 +1377,8 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
     } else if (args[i] === "--app-port") {
       i++;
       appPort = parseAppPort(args[i]);
-    } else if (args[i] === "--tailscale") {
-      process.env.PORTLESS_TAILSCALE = "1";
-    } else if (args[i] === "--funnel") {
-      process.env.PORTLESS_FUNNEL = "1";
-      process.env.PORTLESS_TAILSCALE = "1";
+    } else if (applyTailscaleFlag(args[i])) {
+      // handled
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
       console.error(colors.blue("Known flags: --force, --app-port, --tailscale, --funnel"));
@@ -1641,11 +1650,7 @@ ${colors.bold("Options:")}
   for (const route of routesForClean) {
     if (route.tailscaleHttpsPort) {
       try {
-        if (route.tailscaleFunnel) {
-          unregisterFunnel(route.tailscaleHttpsPort, { ignoreMissing: true });
-        } else {
-          unregisterServe(route.tailscaleHttpsPort, { ignoreMissing: true });
-        }
+        unregisterTailscale(route);
         console.log(colors.green(`Removed tailscale serve on port ${route.tailscaleHttpsPort}.`));
       } catch {
         // Tailscale may not be installed; non-fatal
@@ -1743,11 +1748,7 @@ ${colors.bold("Options:")}
   for (const route of stale) {
     if (route.tailscaleHttpsPort) {
       try {
-        if (route.tailscaleFunnel) {
-          unregisterFunnel(route.tailscaleHttpsPort, { ignoreMissing: true });
-        } else {
-          unregisterServe(route.tailscaleHttpsPort, { ignoreMissing: true });
-        }
+        unregisterTailscale(route);
         console.log(
           `  ${route.hostname} - removed tailscale serve on port ${route.tailscaleHttpsPort}`
         );
