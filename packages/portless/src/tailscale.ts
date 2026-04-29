@@ -8,7 +8,10 @@ const TAILSCALE_BINARY = "tailscale";
  * Ports beyond this list are auto-assigned sequentially but may require
  * Tailscale ACL configuration to be reachable on the tailnet.
  */
-const PREFERRED_PORTS = [443, 8443, 8444, 8445, 8446, 8447, 8448, 8449, 8450];
+const PREFERRED_SERVE_PORTS = [443, 8443, 8444, 8445, 8446, 8447, 8448, 8449, 8450];
+
+/** Tailscale Funnel only supports these three ports. */
+const FUNNEL_PORTS = [443, 8443, 10000];
 
 interface TailscaleCommandResult {
   status: number | null;
@@ -170,14 +173,24 @@ export function getUsedServePorts(runner: TailscaleCommandRunner = defaultRunner
 
 /**
  * Pick the next available HTTPS port from the preferred sequence.
- * Returns the first port not in `usedPorts`.
+ * Returns the first port not in `usedPorts`. Funnel mode is restricted
+ * to 443, 8443, and 10000; serve mode extends beyond its preferred list.
  */
-export function findAvailableServePort(usedPorts: Set<number>): number {
-  for (const port of PREFERRED_PORTS) {
+export function findAvailableServePort(
+  usedPorts: Set<number>,
+  mode: TailscaleMode = "serve"
+): number {
+  const pool = mode === "funnel" ? FUNNEL_PORTS : PREFERRED_SERVE_PORTS;
+  for (const port of pool) {
     if (!usedPorts.has(port)) return port;
   }
-  // Extend beyond the preferred list
-  let port = PREFERRED_PORTS[PREFERRED_PORTS.length - 1] + 1;
+  if (mode === "funnel") {
+    throw new Error(
+      "All Tailscale Funnel ports are in use (443, 8443, 10000). " +
+        "Stop an existing funnel to free a port."
+    );
+  }
+  let port = PREFERRED_SERVE_PORTS[PREFERRED_SERVE_PORTS.length - 1] + 1;
   while (usedPorts.has(port)) port++;
   return port;
 }

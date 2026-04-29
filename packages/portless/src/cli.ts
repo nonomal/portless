@@ -1079,7 +1079,7 @@ async function runApp(
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const usedPorts = getUsedServePorts();
-      tailscaleHttpsPort = findAvailableServePort(usedPorts);
+      tailscaleHttpsPort = findAvailableServePort(usedPorts, wantsFunnel ? "funnel" : "serve");
       try {
         if (wantsFunnel) {
           registerFunnel(port, tailscaleHttpsPort);

@@ -195,6 +195,24 @@ describe("tailscale", () => {
       const all = new Set([443, 8443, 8444, 8445, 8446, 8447, 8448, 8449, 8450]);
       expect(findAvailableServePort(all)).toBe(8451);
     });
+
+    it("returns 443 for funnel when nothing is in use", () => {
+      expect(findAvailableServePort(new Set(), "funnel")).toBe(443);
+    });
+
+    it("returns 8443 for funnel when 443 is taken", () => {
+      expect(findAvailableServePort(new Set([443]), "funnel")).toBe(8443);
+    });
+
+    it("returns 10000 for funnel when 443 and 8443 are taken", () => {
+      expect(findAvailableServePort(new Set([443, 8443]), "funnel")).toBe(10000);
+    });
+
+    it("throws when all funnel ports are taken", () => {
+      expect(() => findAvailableServePort(new Set([443, 8443, 10000]), "funnel")).toThrow(
+        "All Tailscale Funnel ports are in use"
+      );
+    });
   });
 
   // -----------------------------------------------------------------------
