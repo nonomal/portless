@@ -300,9 +300,11 @@ portless myapp --funnel next dev
 # -> https://devbox.yourteam.ts.net    (public)
 ```
 
+Tailscale HTTPS certificates must be enabled before `--tailscale` or `--funnel` can register HTTPS URLs. Funnel must also be enabled for the tailnet and node before `--funnel` can register the public URL. If either setting is missing, portless exits before starting the child process.
+
 Set `PORTLESS_TAILSCALE=1` in your shell profile or `.env` to share every app by default. `portless list` shows both local and tailnet URLs. Tailscale serve registrations are cleaned up automatically when the app exits.
 
-Requires the Tailscale CLI to be installed and connected (`tailscale up`).
+Requires the Tailscale CLI to be installed and connected (`tailscale up`), with Tailscale HTTPS certificates enabled.
 
 ## Commands
 
