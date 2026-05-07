@@ -86,6 +86,13 @@ type ServiceStatus = {
   details?: string;
 };
 
+export type ServiceUninstallResult = {
+  removed: boolean;
+  installed: boolean;
+  error?: string;
+  needsElevation?: boolean;
+};
+
 function defaultRunner(command: string, args: string[], options?: { stdio?: "pipe" | "inherit" }) {
   return spawnSync(command, args, {
     encoding: "utf-8",
@@ -404,6 +411,27 @@ function runOptional(runner: CommandRunner, command: string, args: string[]): vo
   runner(command, args);
 }
 
+function isPermissionError(err: unknown): boolean {
+  const code =
+    err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : "";
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    /permission denied|operation not permitted|access is denied/i.test(message)
+  );
+}
+
+function stopExistingProxy(entryScript: string, runner: CommandRunner): void {
+  runRequired(runner, process.execPath, [
+    entryScript,
+    "proxy",
+    "stop",
+    "--port",
+    SERVICE_PORT.toString(),
+  ]);
+}
+
 function prepareTrust(stateDir: string): void {
   fs.mkdirSync(stateDir, { recursive: true });
   fixOwnership(stateDir);
@@ -437,19 +465,25 @@ async function installService(entryScript: string, runner: CommandRunner): Promi
   prepareTrust(spec.stateDir);
 
   if (spec.platform === "darwin") {
+    runOptional(runner, "launchctl", ["bootout", "system", spec.plistPath]);
+    stopExistingProxy(entryScript, runner);
     fs.writeFileSync(spec.plistPath, spec.plist);
     fs.chmodSync(spec.plistPath, 0o644);
     runRequired(runner, "chown", ["root:wheel", spec.plistPath]);
-    runOptional(runner, "launchctl", ["bootout", "system", spec.plistPath]);
     runRequired(runner, "launchctl", ["bootstrap", "system", spec.plistPath]);
     runRequired(runner, "launchctl", ["enable", `system/${spec.label}`]);
     runRequired(runner, "launchctl", ["kickstart", "-k", `system/${spec.label}`]);
   } else if (spec.platform === "linux") {
+    runOptional(runner, "systemctl", ["disable", "--now", spec.serviceName]);
+    stopExistingProxy(entryScript, runner);
     fs.writeFileSync(spec.unitPath, spec.unit);
     fs.chmodSync(spec.unitPath, 0o644);
     runRequired(runner, "systemctl", ["daemon-reload"]);
-    runRequired(runner, "systemctl", ["enable", "--now", spec.serviceName]);
+    runRequired(runner, "systemctl", ["enable", spec.serviceName]);
+    runRequired(runner, "systemctl", ["restart", spec.serviceName]);
   } else {
+    runOptional(runner, "schtasks", ["/End", "/TN", spec.taskName]);
+    stopExistingProxy(entryScript, runner);
     fs.mkdirSync(spec.scriptDir, { recursive: true });
     fs.writeFileSync(spec.scriptPath, spec.script);
     runRequired(runner, "schtasks", spec.createArgs);
@@ -488,30 +522,39 @@ async function uninstallService(entryScript: string, runner: CommandRunner): Pro
 export function tryUninstallService(
   entryScript: string,
   runner: CommandRunner = defaultRunner
-): { removed: boolean; error?: string } {
+): ServiceUninstallResult {
+  let installed = false;
   try {
     const spec = currentServiceSpec(entryScript);
 
     if (spec.platform === "darwin") {
-      if (!fs.existsSync(spec.plistPath)) return { removed: false };
+      installed = fs.existsSync(spec.plistPath);
+      if (!installed) return { removed: false, installed: false };
       runOptional(runner, "launchctl", ["bootout", "system", spec.plistPath]);
       fs.rmSync(spec.plistPath, { force: true });
     } else if (spec.platform === "linux") {
-      if (!fs.existsSync(spec.unitPath)) return { removed: false };
+      installed = fs.existsSync(spec.unitPath);
+      if (!installed) return { removed: false, installed: false };
       runOptional(runner, "systemctl", ["disable", "--now", spec.serviceName]);
       fs.rmSync(spec.unitPath, { force: true });
       runOptional(runner, "systemctl", ["daemon-reload"]);
     } else {
       const query = runner("schtasks", ["/Query", "/TN", spec.taskName, "/FO", "LIST"]);
-      if (query.status !== 0) return { removed: false };
+      installed = query.status === 0;
+      if (!installed) return { removed: false, installed: false };
       runOptional(runner, "schtasks", ["/End", "/TN", spec.taskName]);
-      runOptional(runner, "schtasks", spec.deleteArgs);
+      runRequired(runner, "schtasks", spec.deleteArgs);
       fs.rmSync(spec.scriptDir, { recursive: true, force: true });
     }
 
-    return { removed: true };
+    return { removed: true, installed: true };
   } catch (err) {
-    return { removed: false, error: err instanceof Error ? err.message : String(err) };
+    return {
+      removed: false,
+      installed,
+      error: err instanceof Error ? err.message : String(err),
+      needsElevation: installed && isPermissionError(err),
+    };
   }
 }
 

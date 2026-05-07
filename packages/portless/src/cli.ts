@@ -375,6 +375,19 @@ function sudoStop(port: number): boolean {
   return result.status === 0;
 }
 
+function runCleanWithSudo(reason: string): boolean {
+  console.log(colors.yellow(`${reason} Requesting sudo...`));
+  const result = spawnSync(
+    "sudo",
+    ["env", ...collectPortlessEnvArgs(), process.execPath, getEntryScript(), "clean"],
+    {
+      stdio: "inherit",
+      timeout: SUDO_SPAWN_TIMEOUT_MS,
+    }
+  );
+  return result.status === 0;
+}
+
 // ---------------------------------------------------------------------------
 // Proxy server lifecycle
 // ---------------------------------------------------------------------------
@@ -1647,19 +1660,31 @@ ${colors.bold("Options:")}
     process.exit(1);
   }
 
+  const serviceResult = tryUninstallService(getEntryScript());
+  if (serviceResult.removed) {
+    console.log(colors.green("Removed startup service."));
+  } else if (serviceResult.needsElevation && !isWindows && (process.getuid?.() ?? -1) !== 0) {
+    if (!runCleanWithSudo("Removing the startup service requires elevated privileges.")) {
+      console.error(colors.red("Failed to remove startup service with sudo."));
+      process.exit(1);
+    }
+    return;
+  } else if (serviceResult.error) {
+    const adminHint = isWindows ? " Run as Administrator and try again." : "";
+    const message = `Could not remove startup service: ${serviceResult.error}${adminHint}`;
+    if (serviceResult.installed) {
+      console.error(colors.red(message));
+      process.exit(1);
+    }
+    console.warn(colors.yellow(message));
+  }
+
   console.log(colors.cyan("Stopping proxy if it is running..."));
   const { dir, port, tls } = await discoverState();
   const store = new RouteStore(dir, {
     onWarning: (msg) => console.warn(colors.yellow(msg)),
   });
   await stopProxy(store, port, tls);
-
-  const serviceResult = tryUninstallService(getEntryScript());
-  if (serviceResult.removed) {
-    console.log(colors.green("Removed startup service."));
-  } else if (serviceResult.error) {
-    console.warn(colors.yellow(`Could not remove startup service: ${serviceResult.error}`));
-  }
 
   // Clean up any tailscale serve/funnel registrations tied to stale routes
   const routesForClean = store.loadRoutesRaw();
@@ -1701,18 +1726,7 @@ ${colors.bold("Options:")}
   if (cleanHostsFile()) {
     console.log(colors.green(`Removed portless entries from ${HOSTS_DISPLAY}.`));
   } else if (!isWindows && process.getuid?.() !== 0) {
-    console.log(
-      colors.yellow(`Updating ${HOSTS_DISPLAY} requires elevated privileges. Requesting sudo...`)
-    );
-    const result = spawnSync(
-      "sudo",
-      ["env", ...collectPortlessEnvArgs(), process.execPath, getEntryScript(), "clean"],
-      {
-        stdio: "inherit",
-        timeout: SUDO_SPAWN_TIMEOUT_MS,
-      }
-    );
-    if (result.status !== 0) {
+    if (!runCleanWithSudo(`Updating ${HOSTS_DISPLAY} requires elevated privileges.`)) {
       console.error(colors.red(`Failed to update ${HOSTS_DISPLAY}. Run: sudo portless clean`));
       process.exit(1);
     }

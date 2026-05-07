@@ -3,10 +3,62 @@ import { buildServiceSpec, handleService, tryUninstallService } from "./service.
 
 vi.mock("node:fs", async (importOriginal) => {
   const mod = await importOriginal<typeof import("node:fs")>();
-  return { ...mod, existsSync: vi.fn(mod.existsSync) };
+  return {
+    ...mod,
+    chmodSync: vi.fn(),
+    existsSync: vi.fn(mod.existsSync),
+    mkdirSync: vi.fn(),
+    rmSync: vi.fn(),
+    writeFileSync: vi.fn(),
+  };
 });
 
-const { existsSync } = await import("node:fs");
+vi.mock("./certs.js", () => ({
+  ensureCerts: vi.fn(() => ({
+    certPath: "/fake/server.pem",
+    keyPath: "/fake/server-key.pem",
+    caPath: "/fake/ca.pem",
+    caGenerated: false,
+  })),
+  isCATrusted: vi.fn(() => true),
+  trustCA: vi.fn(() => ({ trusted: true })),
+}));
+
+vi.mock("./utils.js", () => ({
+  fixOwnership: vi.fn(),
+}));
+
+const { existsSync, rmSync } = await import("node:fs");
+
+const originalPlatform = process.platform;
+const originalGetuid = process.getuid;
+
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform,
+  });
+}
+
+function setGetuid(uid: number): void {
+  Object.defineProperty(process, "getuid", {
+    configurable: true,
+    value: () => uid,
+  });
+}
+
+afterEach(() => {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: originalPlatform,
+  });
+  Object.defineProperty(process, "getuid", {
+    configurable: true,
+    value: originalGetuid,
+  });
+  vi.mocked(existsSync).mockRestore();
+  vi.mocked(rmSync).mockRestore();
+});
 
 describe("buildServiceSpec", () => {
   it("builds a macOS LaunchDaemon for the HTTPS proxy", () => {
@@ -131,9 +183,11 @@ describe("buildServiceSpec", () => {
 
 describe("tryUninstallService", () => {
   it("returns removed: false when service is not installed", () => {
+    vi.mocked(existsSync).mockReturnValue(false);
     const runner = () => ({ status: 1, stdout: "", stderr: "" });
     const result = tryUninstallService("/fake/cli.js", runner);
     expect(result.removed).toBe(false);
+    expect(result.installed).toBe(false);
   });
 
   it("returns removed: false when runner throws", () => {
@@ -144,7 +198,25 @@ describe("tryUninstallService", () => {
     const result = tryUninstallService("/fake/cli.js", runner);
     vi.mocked(existsSync).mockRestore();
     expect(result.removed).toBe(false);
+    expect(result.installed).toBe(true);
     expect(result.error).toContain("spawn failed");
+  });
+
+  it("marks installed services that need elevation", () => {
+    setPlatform("linux");
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(rmSync).mockImplementation(() => {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    });
+    const runner = vi.fn(() => ({ status: 0, stdout: "", stderr: "" }));
+
+    const result = tryUninstallService("/fake/cli.js", runner);
+
+    expect(result.removed).toBe(false);
+    expect(result.installed).toBe(true);
+    expect(result.needsElevation).toBe(true);
   });
 });
 
@@ -196,5 +268,33 @@ describe("handleService", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     const output = errorSpy.mock.calls.map((c: unknown[]) => c.join(" ")).join("\n");
     expect(output).toContain("bogus");
+  });
+
+  it("stops an existing proxy before restarting the Linux service", async () => {
+    setPlatform("linux");
+    setGetuid(0);
+    const runner = vi.fn((_: string, _args: string[]) => ({
+      status: 0,
+      stdout: "",
+      stderr: "",
+    }));
+
+    await handleService(["service", "install"], {
+      entryScript: "/fake/cli.js",
+      runner,
+    });
+
+    const calls = runner.mock.calls.map(([command, args]) => ({ command, args }));
+    const stopIndex = calls.findIndex(
+      (call) =>
+        call.command === process.execPath &&
+        call.args.join(" ") === "/fake/cli.js proxy stop --port 443"
+    );
+    const restartIndex = calls.findIndex(
+      (call) => call.command === "systemctl" && call.args.join(" ") === "restart portless.service"
+    );
+
+    expect(stopIndex).toBeGreaterThanOrEqual(0);
+    expect(restartIndex).toBeGreaterThan(stopIndex);
   });
 });
