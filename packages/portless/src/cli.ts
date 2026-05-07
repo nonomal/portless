@@ -95,7 +95,7 @@ import {
   hasTurboConfig,
 } from "./turbo.js";
 import type { ManifestEntry } from "./turbo.js";
-import { handleService, tryUninstallService } from "./service.js";
+import { buildServiceUninstallSudoArgs, handleService, tryUninstallService } from "./service.js";
 
 const chalk = colors;
 
@@ -377,14 +377,31 @@ function sudoStop(port: number): boolean {
 
 function runCleanWithSudo(reason: string): boolean {
   console.log(colors.yellow(`${reason} Requesting sudo...`));
+  const home = process.env.HOME;
   const result = spawnSync(
     "sudo",
-    ["env", ...collectPortlessEnvArgs(), process.execPath, getEntryScript(), "clean"],
+    [
+      "env",
+      ...collectPortlessEnvArgs(),
+      ...(home ? [`HOME=${home}`] : []),
+      process.execPath,
+      getEntryScript(),
+      "clean",
+    ],
     {
       stdio: "inherit",
       timeout: SUDO_SPAWN_TIMEOUT_MS,
     }
   );
+  return result.status === 0;
+}
+
+function runServiceUninstallWithSudo(reason: string): boolean {
+  console.log(colors.yellow(`${reason} Requesting sudo...`));
+  const result = spawnSync("sudo", buildServiceUninstallSudoArgs(getEntryScript()), {
+    stdio: "inherit",
+    timeout: SUDO_SPAWN_TIMEOUT_MS,
+  });
   return result.status === 0;
 }
 
@@ -1664,11 +1681,12 @@ ${colors.bold("Options:")}
   if (serviceResult.removed) {
     console.log(colors.green("Removed startup service."));
   } else if (serviceResult.needsElevation && !isWindows && (process.getuid?.() ?? -1) !== 0) {
-    if (!runCleanWithSudo("Removing the startup service requires elevated privileges.")) {
+    if (
+      !runServiceUninstallWithSudo("Removing the startup service requires elevated privileges.")
+    ) {
       console.error(colors.red("Failed to remove startup service with sudo."));
       process.exit(1);
     }
-    return;
   } else if (serviceResult.error) {
     const adminHint = isWindows ? " Run as Administrator and try again." : "";
     const message = `Could not remove startup service: ${serviceResult.error}${adminHint}`;

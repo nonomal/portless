@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildServiceSpec, handleService, tryUninstallService } from "./service.js";
+import {
+  buildServiceSpec,
+  buildServiceUninstallSudoArgs,
+  handleService,
+  tryUninstallService,
+} from "./service.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const mod = await importOriginal<typeof import("node:fs")>();
@@ -152,6 +157,21 @@ describe("buildServiceSpec", () => {
     expect(spec.script).toContain("--skip-trust");
   });
 
+  it("preserves PATH in the Windows startup script", () => {
+    const spec = buildServiceSpec({
+      platform: "win32",
+      nodePath: "C:\\nodejs\\node.exe",
+      entryScript: "C:\\cli.js",
+      userHome: "C:\\Users\\Alice",
+      pathEnv: "C:\\Program Files\\Git\\mingw64\\bin;C:\\Tools\\100%Done",
+    });
+
+    if (spec.platform !== "win32") throw new Error("Expected Windows service spec");
+    expect(spec.script).toContain(
+      'set "PATH=C:\\Program Files\\Git\\mingw64\\bin;C:\\Tools\\100%%Done"'
+    );
+  });
+
   it("escapes percent signs in Windows batch env values", () => {
     const spec = buildServiceSpec({
       platform: "win32",
@@ -178,6 +198,32 @@ describe("buildServiceSpec", () => {
     if (spec.platform !== "darwin") throw new Error("Expected macOS service spec");
     expect(spec.plist).toContain("<key>KeepAlive</key>\n  <true/>");
     expect(spec.plist).not.toContain("SuccessfulExit");
+  });
+});
+
+describe("buildServiceUninstallSudoArgs", () => {
+  it("builds a service-scoped sudo command that preserves user state", () => {
+    const args = buildServiceUninstallSudoArgs("/fake/cli.js", {
+      nodePath: "/usr/bin/node",
+      home: "/Users/alice",
+      env: {
+        PORTLESS_STATE_DIR: "/Users/alice/.portless",
+        PORTLESS_DEBUG: "1",
+        OTHER_ENV: "ignored",
+      },
+    });
+
+    expect(args).toEqual([
+      "env",
+      "PORTLESS_DEBUG=1",
+      "HOME=/Users/alice",
+      "PORTLESS_STATE_DIR=/Users/alice/.portless",
+      "/usr/bin/node",
+      "/fake/cli.js",
+      "service",
+      "uninstall",
+    ]);
+    expect(args).not.toContain("clean");
   });
 });
 

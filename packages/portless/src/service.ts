@@ -185,6 +185,7 @@ function buildServiceEnv(ctx: ServiceContext): Record<string, string> {
 
   if (ctx.platform === "win32") {
     env.USERPROFILE = ctx.user.home;
+    env.PATH = ctx.pathEnv;
   } else {
     env.HOME = ctx.user.home;
     if (ctx.user.uid) env.SUDO_UID = ctx.user.uid;
@@ -376,19 +377,72 @@ function currentServiceSpec(entryScript: string): ServiceSpec {
   });
 }
 
+function collectPortlessEnvArgs(
+  env: NodeJS.ProcessEnv = process.env,
+  omit: Set<string> = new Set()
+): string[] {
+  const envArgs: string[] = [];
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("PORTLESS_") && env[key] && !omit.has(key)) {
+      envArgs.push(`${key}=${env[key]}`);
+    }
+  }
+  return envArgs;
+}
+
+function buildElevatedEnvArgs(options: {
+  home: string;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+  extraEnv?: Record<string, string>;
+}): string[] {
+  const extraEnv = options.extraEnv ?? {};
+  const overrideKeys = new Set(["PORTLESS_STATE_DIR", ...Object.keys(extraEnv)]);
+  return [
+    "env",
+    ...collectPortlessEnvArgs(options.env, overrideKeys),
+    ...Object.entries(extraEnv).map(([key, value]) => `${key}=${value}`),
+    `HOME=${options.home}`,
+    `PORTLESS_STATE_DIR=${options.stateDir}`,
+  ];
+}
+
+export function buildServiceUninstallSudoArgs(
+  entryScript: string,
+  options: {
+    nodePath?: string;
+    home?: string;
+    stateDir?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {}
+): string[] {
+  const env = options.env ?? process.env;
+  const home = options.home ?? os.homedir();
+  const stateDir = options.stateDir ?? env.PORTLESS_STATE_DIR ?? path.join(home, ".portless");
+  return [
+    ...buildElevatedEnvArgs({ home, stateDir, env }),
+    options.nodePath ?? process.execPath,
+    entryScript,
+    "service",
+    "uninstall",
+  ];
+}
+
 function requireUnixElevation(args: string[], runner: CommandRunner): void {
   if (process.platform !== "darwin" && process.platform !== "linux") return;
   if ((process.getuid?.() ?? -1) === 0) return;
   if (process.env[INTERNAL_ELEVATED_ENV] === "1") return;
 
-  const stateDir = process.env.PORTLESS_STATE_DIR || path.join(os.homedir(), ".portless");
+  const home = os.homedir();
+  const stateDir = process.env.PORTLESS_STATE_DIR || path.join(home, ".portless");
   const result = runner(
     "sudo",
     [
-      "env",
-      `${INTERNAL_ELEVATED_ENV}=1`,
-      `HOME=${os.homedir()}`,
-      `PORTLESS_STATE_DIR=${stateDir}`,
+      ...buildElevatedEnvArgs({
+        home,
+        stateDir,
+        extraEnv: { [INTERNAL_ELEVATED_ENV]: "1" },
+      }),
       process.execPath,
       args[0],
       ...args.slice(1),
