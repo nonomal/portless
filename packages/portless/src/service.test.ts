@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildServiceSpec, handleService, tryUninstallService } from "./service.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("node:fs")>();
+  return { ...mod, existsSync: vi.fn(mod.existsSync) };
+});
+
+const { existsSync } = await import("node:fs");
+
 describe("buildServiceSpec", () => {
   it("builds a macOS LaunchDaemon for the HTTPS proxy", () => {
     const spec = buildServiceSpec({
@@ -130,10 +137,12 @@ describe("tryUninstallService", () => {
   });
 
   it("returns removed: false when runner throws", () => {
+    vi.mocked(existsSync).mockReturnValue(true);
     const runner = () => {
       throw new Error("spawn failed");
     };
     const result = tryUninstallService("/fake/cli.js", runner);
+    vi.mocked(existsSync).mockRestore();
     expect(result.removed).toBe(false);
     expect(result.error).toContain("spawn failed");
   });
