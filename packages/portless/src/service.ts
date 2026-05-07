@@ -143,7 +143,9 @@ function resolveUserContext(platform: SupportedPlatform): UserContext {
       process.env.HOME && process.env.HOME !== "/var/root" && process.env.HOME !== "/root"
         ? process.env.HOME
         : readPasswdHome(sudoUser) ||
-          (platform === "darwin" ? path.join("/Users", sudoUser) : path.join("/home", sudoUser));
+          (platform === "darwin"
+            ? path.posix.join("/Users", sudoUser)
+            : path.posix.join("/home", sudoUser));
     return { home, uid: sudoUid, gid: sudoGid, username: sudoUser };
   }
 
@@ -188,7 +190,7 @@ function buildServiceEnv(ctx: ServiceContext): Record<string, string> {
 function defaultStateDir(platform: SupportedPlatform, userHome: string): string {
   return platform === "win32"
     ? path.win32.join(userHome, ".portless")
-    : path.join(userHome, ".portless");
+    : path.posix.join(userHome, ".portless");
 }
 
 function buildLaunchdPlist(ctx: ServiceContext, programArguments: string[]): string {
@@ -220,9 +222,9 @@ ${envEntries}
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(ctx.stateDir, "service.log"))}</string>
+  <string>${xmlEscape(path.posix.join(ctx.stateDir, "service.log"))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(ctx.stateDir, "service.log"))}</string>
+  <string>${xmlEscape(path.posix.join(ctx.stateDir, "service.log"))}</string>
 </dict>
 </plist>
 `;

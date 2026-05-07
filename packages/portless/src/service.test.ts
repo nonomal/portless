@@ -130,8 +130,8 @@ describe("buildServiceSpec", () => {
 });
 
 describe("tryUninstallService", () => {
-  it("returns removed: false when service is not installed (darwin)", () => {
-    const runner = () => ({ status: 0, stdout: "", stderr: "" });
+  it("returns removed: false when service is not installed", () => {
+    const runner = () => ({ status: 1, stdout: "", stderr: "" });
     const result = tryUninstallService("/fake/cli.js", runner);
     expect(result.removed).toBe(false);
   });
