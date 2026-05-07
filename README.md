@@ -259,7 +259,7 @@ portless service status
 portless service uninstall
 ```
 
-The service uses portless defaults: HTTPS on port 443 with `.localhost` names. macOS and Linux install a root-owned service so port 443 can bind at boot. Windows installs a Task Scheduler startup task that runs as SYSTEM. Installation and removal may require administrator privileges.
+The service uses portless defaults: HTTPS on port 443 with `.localhost` names. macOS and Linux install a root-owned service so port 443 can bind at boot. Windows installs a Task Scheduler startup task that runs as SYSTEM. Installation and removal may require administrator privileges. `portless clean` automatically removes the service.
 
 ## LAN mode
 

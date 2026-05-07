@@ -218,10 +218,7 @@ ${envEntries}
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
+  <true/>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(ctx.stateDir, "service.log"))}</string>
   <key>StandardErrorPath</key>
@@ -260,7 +257,7 @@ WantedBy=multi-user.target
 function buildWindowsScript(ctx: ServiceContext, command: string[]): string {
   const env = buildServiceEnv(ctx);
   const setEnv = Object.entries(env)
-    .map(([key, value]) => `set "${key}=${value.replace(/"/g, "")}"`)
+    .map(([key, value]) => `set "${key}=${value.replace(/"/g, "").replace(/%/g, "%%")}"`)
     .join("\r\n");
   const proxyCommand = [windowsQuote(ctx.nodePath), ...command.map(windowsQuote)].join(" ");
   return `@echo off\r\n${setEnv}\r\n${proxyCommand}\r\n`;
@@ -370,10 +367,10 @@ function currentServiceSpec(entryScript: string): ServiceSpec {
   });
 }
 
-function requireUnixElevation(args: string[], runner: CommandRunner): boolean {
-  if (process.platform !== "darwin" && process.platform !== "linux") return false;
-  if ((process.getuid?.() ?? -1) === 0) return false;
-  if (process.env[INTERNAL_ELEVATED_ENV] === "1") return false;
+function requireUnixElevation(args: string[], runner: CommandRunner): void {
+  if (process.platform !== "darwin" && process.platform !== "linux") return;
+  if ((process.getuid?.() ?? -1) === 0) return;
+  if (process.env[INTERNAL_ELEVATED_ENV] === "1") return;
 
   const stateDir = process.env.PORTLESS_STATE_DIR || path.join(os.homedir(), ".portless");
   const result = runner(
@@ -408,7 +405,14 @@ function runOptional(runner: CommandRunner, command: string, args: string[]): vo
 function prepareTrust(stateDir: string): void {
   fs.mkdirSync(stateDir, { recursive: true });
   fixOwnership(stateDir);
-  ensureCerts(stateDir);
+  try {
+    ensureCerts(stateDir);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to generate certificates in ${stateDir}. Ensure OpenSSL is installed.\n${detail}`
+    );
+  }
   if (isCATrusted(stateDir)) return;
 
   console.log(colors.gray("Trusting portless CA for service startup..."));
@@ -472,6 +476,41 @@ async function uninstallService(entryScript: string, runner: CommandRunner): Pro
   }
 
   console.log(colors.green("Portless service uninstalled."));
+}
+
+/**
+ * Best-effort service removal for use by `portless clean`. Skips elevation
+ * (caller is expected to already be elevated) and returns a result instead of
+ * calling process.exit.
+ */
+export function tryUninstallService(
+  entryScript: string,
+  runner: CommandRunner = defaultRunner
+): { removed: boolean; error?: string } {
+  try {
+    const spec = currentServiceSpec(entryScript);
+
+    if (spec.platform === "darwin") {
+      if (!fs.existsSync(spec.plistPath)) return { removed: false };
+      runOptional(runner, "launchctl", ["bootout", "system", spec.plistPath]);
+      fs.rmSync(spec.plistPath, { force: true });
+    } else if (spec.platform === "linux") {
+      if (!fs.existsSync(spec.unitPath)) return { removed: false };
+      runOptional(runner, "systemctl", ["disable", "--now", spec.serviceName]);
+      fs.rmSync(spec.unitPath, { force: true });
+      runOptional(runner, "systemctl", ["daemon-reload"]);
+    } else {
+      const query = runner("schtasks", ["/Query", "/TN", "Portless Proxy", "/FO", "LIST"]);
+      if (query.status !== 0) return { removed: false };
+      runOptional(runner, "schtasks", ["/End", "/TN", spec.taskName]);
+      runOptional(runner, "schtasks", spec.deleteArgs);
+      fs.rmSync(spec.scriptDir, { recursive: true, force: true });
+    }
+
+    return { removed: true };
+  } catch (err) {
+    return { removed: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function getServiceStatus(

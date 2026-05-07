@@ -95,7 +95,7 @@ import {
   hasTurboConfig,
 } from "./turbo.js";
 import type { ManifestEntry } from "./turbo.js";
-import { handleService } from "./service.js";
+import { handleService, tryUninstallService } from "./service.js";
 
 const chalk = colors;
 
@@ -1620,10 +1620,11 @@ async function handleClean(args: string[]): Promise<void> {
     console.log(`
 ${colors.bold("portless clean")} - Remove portless artifacts from this machine.
 
-Stops the proxy if it is running, removes the local CA from the OS trust store
-when it was installed by portless, deletes known files under state directories
-(~/.portless, the system state directory, and PORTLESS_STATE_DIR when set),
-and removes the portless block from ${HOSTS_DISPLAY}.
+Stops the proxy if it is running, uninstalls the startup service if installed,
+removes the local CA from the OS trust store when it was installed by portless,
+deletes known files under state directories (~/.portless, the system state
+directory, and PORTLESS_STATE_DIR when set), and removes the portless block
+from ${HOSTS_DISPLAY}.
 
 Only allowlisted filenames under each state directory are deleted. Custom
 certificate paths from --cert and --key are never removed.
@@ -1652,6 +1653,13 @@ ${colors.bold("Options:")}
     onWarning: (msg) => console.warn(colors.yellow(msg)),
   });
   await stopProxy(store, port, tls);
+
+  const serviceResult = tryUninstallService(getEntryScript());
+  if (serviceResult.removed) {
+    console.log(colors.green("Removed startup service."));
+  } else if (serviceResult.error) {
+    console.warn(colors.yellow(`Could not remove startup service: ${serviceResult.error}`));
+  }
 
   // Clean up any tailscale serve/funnel registrations tied to stale routes
   const routesForClean = store.loadRoutesRaw();

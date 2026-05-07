@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildServiceSpec } from "./service.js";
+import { buildServiceSpec, tryUninstallService } from "./service.js";
 
 describe("buildServiceSpec", () => {
   it("builds a macOS LaunchDaemon for the HTTPS proxy", () => {
@@ -91,5 +91,50 @@ describe("buildServiceSpec", () => {
     expect(spec.script).toContain("443");
     expect(spec.script).toContain("--https");
     expect(spec.script).toContain("--skip-trust");
+  });
+
+  it("escapes percent signs in Windows batch env values", () => {
+    const spec = buildServiceSpec({
+      platform: "win32",
+      nodePath: "C:\\nodejs\\node.exe",
+      entryScript: "C:\\cli.js",
+      userHome: "C:\\Users\\100%Done",
+    });
+
+    if (spec.platform !== "win32") throw new Error("Expected Windows service spec");
+    expect(spec.script).toContain("PORTLESS_STATE_DIR=C:\\Users\\100%%Done\\.portless");
+    expect(spec.script).not.toMatch(/(?<!%)%(?!%)/);
+  });
+
+  it("uses unconditional KeepAlive in the macOS plist", () => {
+    const spec = buildServiceSpec({
+      platform: "darwin",
+      nodePath: "/usr/local/bin/node",
+      entryScript: "/usr/local/lib/portless/cli.js",
+      userHome: "/Users/bob",
+      uid: "501",
+      gid: "20",
+    });
+
+    if (spec.platform !== "darwin") throw new Error("Expected macOS service spec");
+    expect(spec.plist).toContain("<key>KeepAlive</key>\n  <true/>");
+    expect(spec.plist).not.toContain("SuccessfulExit");
+  });
+});
+
+describe("tryUninstallService", () => {
+  it("returns removed: false when service is not installed (darwin)", () => {
+    const runner = () => ({ status: 0, stdout: "", stderr: "" });
+    const result = tryUninstallService("/fake/cli.js", runner);
+    expect(result.removed).toBe(false);
+  });
+
+  it("returns removed: false when runner throws", () => {
+    const runner = () => {
+      throw new Error("spawn failed");
+    };
+    const result = tryUninstallService("/fake/cli.js", runner);
+    expect(result.removed).toBe(false);
+    expect(result.error).toContain("spawn failed");
   });
 });
