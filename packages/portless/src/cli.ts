@@ -95,6 +95,7 @@ import {
   hasTurboConfig,
 } from "./turbo.js";
 import type { ManifestEntry } from "./turbo.js";
+import { handleService } from "./service.js";
 
 const chalk = colors;
 
@@ -1418,6 +1419,7 @@ ${colors.bold("Usage:")}
   ${colors.cyan("portless <name> <cmd>")}            Run with an explicit app name
   ${colors.cyan("portless proxy start")}             Start the proxy (HTTPS on port 443, daemon)
   ${colors.cyan("portless proxy stop")}              Stop the proxy
+  ${colors.cyan("portless service install")}         Start proxy automatically when the OS starts
   ${colors.cyan("portless get <name>")}              Print URL for a service (for cross-service refs)
   ${colors.cyan("portless alias <name> <port>")}     Register a static route (e.g. for Docker)
   ${colors.cyan("portless alias --remove <name>")}   Remove a static route
@@ -1435,6 +1437,7 @@ ${colors.bold("Examples:")}
   portless myapp next dev             # -> https://myapp.localhost
   portless run next dev               # -> https://<project>.localhost
   portless run next dev               # in worktree -> https://<worktree>.<project>.localhost
+  portless service install            # Start HTTPS proxy on OS startup
   portless get backend                # -> https://backend.localhost
   portless myapp --tailscale next dev # -> also https://<node>.ts.net (tailnet)
   portless myapp --funnel next dev    # -> also https://<node>.ts.net (public)
@@ -1555,7 +1558,7 @@ ${colors.bold("Skip portless:")}
   PORTLESS=0 pnpm dev           # Runs command directly without proxy
 
 ${colors.bold("Reserved names:")}
-  run, get, alias, hosts, list, trust, clean, prune, proxy are subcommands and
+  run, get, alias, hosts, list, trust, clean, prune, proxy, service are subcommands and
   cannot be used as app names directly. Use "portless run" to infer the name,
   or "portless --name <name>" to force any name including reserved ones.
 `);
@@ -3411,7 +3414,7 @@ async function main() {
 
   // --name flag: treat the next arg as an explicit app name, bypassing
   // subcommand dispatch. Useful when the app name collides with a reserved
-  // subcommand (run, alias, hosts, list, trust, clean, prune, proxy).
+  // subcommand (run, alias, hosts, list, trust, clean, prune, proxy, service).
   if (args[0] === "--name") {
     args.shift();
     if (!args[0]) {
@@ -3450,7 +3453,7 @@ async function main() {
     skipPortless &&
     (isRunCommand ||
       args.length === 0 ||
-      (args.length >= 2 && args[0] !== "proxy" && args[0] !== "clean"))
+      (args.length >= 2 && args[0] !== "proxy" && args[0] !== "clean" && args[0] !== "service"))
   ) {
     const parsed = isRunCommand ? parseRunArgs(args) : parseAppArgs(args);
     let commandArgs = parsed.commandArgs;
@@ -3468,7 +3471,7 @@ async function main() {
     return;
   }
 
-  // Global dispatch: help, version, trust, clean, prune, list, alias, hosts, proxy
+  // Global dispatch: help, version, trust, clean, prune, list, alias, hosts, proxy, service
   // When `run` is used, skip these so args like "list" or "--help" are treated
   // as child-command tokens, not portless subcommands.
   if (!isRunCommand) {
@@ -3517,6 +3520,10 @@ async function main() {
     }
     if (args[0] === "proxy") {
       await handleProxy(args);
+      return;
+    }
+    if (args[0] === "service") {
+      await handleService(args, { entryScript: getEntryScript() });
       return;
     }
   }
