@@ -39,8 +39,19 @@ vi.mock("./mdns.js", () => ({
   isMdnsSupported: vi.fn(() => ({ supported: true })),
 }));
 
+vi.mock("./cli-utils.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./cli-utils.js")>();
+  return {
+    ...mod,
+    discoverState: vi.fn(mod.discoverState),
+    isProxyRunning: vi.fn(mod.isProxyRunning),
+  };
+});
+
 const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
 const { isMdnsSupported } = await import("./mdns.js");
+const { discoverState, isProxyRunning } = await import("./cli-utils.js");
+const actualCliUtils = await vi.importActual<typeof import("./cli-utils.js")>("./cli-utils.js");
 
 const originalPlatform = process.platform;
 const originalGetuid = process.getuid;
@@ -74,6 +85,10 @@ afterEach(() => {
   vi.mocked(rmSync).mockRestore();
   vi.mocked(writeFileSync).mockRestore();
   vi.mocked(isMdnsSupported).mockReturnValue({ supported: true });
+  vi.mocked(discoverState).mockReset();
+  vi.mocked(discoverState).mockImplementation(actualCliUtils.discoverState);
+  vi.mocked(isProxyRunning).mockReset();
+  vi.mocked(isProxyRunning).mockImplementation(actualCliUtils.isProxyRunning);
 });
 
 describe("buildServiceSpec", () => {
@@ -457,6 +472,43 @@ describe("handleService", () => {
       command: process.execPath,
       args: ["/fake/cli.js", "proxy", "stop", "--port", "8443"],
     });
+  });
+
+  it("stops the discovered proxy before a different install port", async () => {
+    setPlatform("linux");
+    setGetuid(0);
+    const currentPort = 19000;
+    const targetPort = 19001;
+    vi.mocked(discoverState).mockResolvedValue({
+      dir: "/tmp/portless-service-current-test",
+      port: currentPort,
+      tls: true,
+      tld: "localhost",
+      lanMode: false,
+      lanIp: null,
+    });
+    vi.mocked(isProxyRunning).mockImplementation(async (port) => port === currentPort);
+    const runner = vi.fn((_: string, _args: string[]) => ({
+      status: 0,
+      stdout: "",
+      stderr: "",
+    }));
+
+    await handleService(["service", "install", "--port", targetPort.toString()], {
+      entryScript: "/fake/cli.js",
+      runner,
+    });
+
+    const stopPorts = runner.mock.calls
+      .filter(
+        ([command, args]) =>
+          command === process.execPath &&
+          args[0] === "/fake/cli.js" &&
+          args[1] === "proxy" &&
+          args[2] === "stop"
+      )
+      .map(([, args]) => args[4]);
+    expect(stopPorts).toEqual([currentPort.toString(), targetPort.toString()]);
   });
 
   it("does not validate proxy env while uninstalling", async () => {

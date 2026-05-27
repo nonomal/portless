@@ -7,6 +7,7 @@ import { ensureCerts, isCATrusted, trustCA } from "./certs.js";
 import {
   buildProxyStartConfig,
   DEFAULT_TLD,
+  discoverState,
   getProtocolPort,
   isProxyRunning,
   validateTld,
@@ -900,7 +901,7 @@ function isPermissionError(err: unknown): boolean {
   );
 }
 
-function stopExistingProxy(entryScript: string, runner: CommandRunner, proxyPort: number): void {
+function stopProxyOnPort(entryScript: string, runner: CommandRunner, proxyPort: number): void {
   runRequired(runner, process.execPath, [
     entryScript,
     "proxy",
@@ -908,6 +909,27 @@ function stopExistingProxy(entryScript: string, runner: CommandRunner, proxyPort
     "--port",
     proxyPort.toString(),
   ]);
+}
+
+async function stopExistingProxy(
+  entryScript: string,
+  runner: CommandRunner,
+  proxyPort: number
+): Promise<void> {
+  const ports = new Set<number>();
+  try {
+    const currentState = await discoverState();
+    if (currentState.port !== proxyPort && (await isProxyRunning(currentState.port))) {
+      ports.add(currentState.port);
+    }
+  } catch {
+    // Best effort. The target port stop below still performs stale state cleanup.
+  }
+
+  ports.add(proxyPort);
+  for (const port of ports) {
+    stopProxyOnPort(entryScript, runner, port);
+  }
 }
 
 function prepareServiceState(stateDir: string): void {
@@ -968,7 +990,7 @@ async function installService(
 
   if (spec.platform === "darwin") {
     runOptional(runner, "launchctl", ["bootout", "system", spec.plistPath]);
-    stopExistingProxy(entryScript, runner, spec.config.proxyPort);
+    await stopExistingProxy(entryScript, runner, spec.config.proxyPort);
     fs.writeFileSync(spec.plistPath, spec.plist);
     fs.chmodSync(spec.plistPath, 0o644);
     runRequired(runner, "chown", ["root:wheel", spec.plistPath]);
@@ -977,7 +999,7 @@ async function installService(
     runRequired(runner, "launchctl", ["kickstart", "-k", `system/${spec.label}`]);
   } else if (spec.platform === "linux") {
     runOptional(runner, "systemctl", ["disable", "--now", spec.serviceName]);
-    stopExistingProxy(entryScript, runner, spec.config.proxyPort);
+    await stopExistingProxy(entryScript, runner, spec.config.proxyPort);
     fs.writeFileSync(spec.unitPath, spec.unit);
     fs.chmodSync(spec.unitPath, 0o644);
     runRequired(runner, "systemctl", ["daemon-reload"]);
@@ -985,7 +1007,7 @@ async function installService(
     runRequired(runner, "systemctl", ["restart", spec.serviceName]);
   } else {
     runOptional(runner, "schtasks", ["/End", "/TN", spec.taskName]);
-    stopExistingProxy(entryScript, runner, spec.config.proxyPort);
+    await stopExistingProxy(entryScript, runner, spec.config.proxyPort);
     fs.mkdirSync(spec.scriptDir, { recursive: true });
     fs.writeFileSync(spec.scriptPath, spec.script);
     runRequired(runner, "schtasks", spec.createArgs);
