@@ -1,8 +1,23 @@
 # Changelog
 
-## 0.13.1
+## 0.14.0
 
 <!-- release:start -->
+
+### New Features
+
+- **ngrok sharing**: New `--ngrok` flag exposes portless apps publicly through ngrok while keeping the local `.localhost` URL. Also configurable with `PORTLESS_NGROK=1`; child processes receive `PORTLESS_NGROK_URL`, and `portless list` shows active ngrok URLs. (#323)
+
+### Improvements
+
+- **ngrok tunnel lifecycle**: Portless now checks for the ngrok CLI before starting an app, surfaces install and authentication guidance, removes stopped ngrok URLs from route state, and terminates tunnel processes during app cleanup. (#323)
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.13.1
 
 ### New Features
 
@@ -23,7 +38,6 @@
 - @skaldebane
 - @ItalianScallian
 - @neefrehman
-<!-- release:end -->
 
 ## 0.13.0
 
