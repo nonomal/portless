@@ -444,4 +444,26 @@ describe("RouteStore", () => {
       expect(routes[0].tailscaleUrl).toBeUndefined();
     });
   });
+
+  describe("ngrok metadata", () => {
+    it("persists and loads ngrok fields via updateRoute", () => {
+      store.addRoute("myapp.localhost", 4123, process.pid);
+      store.updateRoute("myapp.localhost", {
+        ngrokUrl: "https://abc123.ngrok.app",
+        ngrokPid: 12345,
+      });
+      const routes = store.loadRoutes();
+      expect(routes).toHaveLength(1);
+      expect(routes[0].ngrokUrl).toBe("https://abc123.ngrok.app");
+      expect(routes[0].ngrokPid).toBe(12345);
+    });
+
+    it("loads routes without ngrok fields", () => {
+      store.addRoute("legacy.localhost", 4000, process.pid);
+      const routes = store.loadRoutes();
+      expect(routes).toHaveLength(1);
+      expect(routes[0].ngrokUrl).toBeUndefined();
+      expect(routes[0].ngrokPid).toBeUndefined();
+    });
+  });
 });

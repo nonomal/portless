@@ -21,6 +21,7 @@ import {
   registerServe,
   unregisterTailscale,
 } from "./tailscale.js";
+import { ensureNgrokAvailable, startNgrok, stopNgrok, stopNgrokProcess } from "./ngrok.js";
 import {
   inferProjectName,
   detectWorktreePrefix,
@@ -403,6 +404,10 @@ function runServiceUninstallWithSudo(reason: string): boolean {
     timeout: SUDO_SPAWN_TIMEOUT_MS,
   });
   return result.status === 0;
+}
+
+function isEnabledEnv(value: string | undefined): boolean {
+  return value === "1" || value === "true";
 }
 
 // ---------------------------------------------------------------------------
@@ -815,6 +820,9 @@ function listRoutes(store: RouteStore, proxyPort: number, tls: boolean): void {
       const tsLabel = route.tailscaleFunnel ? "funnel" : "tailscale";
       console.log(`    ${colors.gray(tsLabel + ":")} ${colors.green(route.tailscaleUrl)}`);
     }
+    if (route.ngrokUrl) {
+      console.log(`    ${colors.gray("ngrok:")} ${colors.green(route.ngrokUrl)}`);
+    }
   }
   console.log();
 }
@@ -981,11 +989,9 @@ async function runApp(
 
   // Check tailscale readiness early, before auto-starting the proxy.
   // No point starting the proxy if tailscale will fail afterward.
-  const wantsFunnel = process.env.PORTLESS_FUNNEL === "1" || process.env.PORTLESS_FUNNEL === "true";
-  const wantsTailscale =
-    wantsFunnel ||
-    process.env.PORTLESS_TAILSCALE === "1" ||
-    process.env.PORTLESS_TAILSCALE === "true";
+  const wantsFunnel = isEnabledEnv(process.env.PORTLESS_FUNNEL);
+  const wantsTailscale = wantsFunnel || isEnabledEnv(process.env.PORTLESS_TAILSCALE);
+  const wantsNgrok = isEnabledEnv(process.env.PORTLESS_NGROK);
   let tsBaseUrl: string | undefined;
 
   if (wantsTailscale) {
@@ -1003,6 +1009,19 @@ async function runApp(
       } else if (!message.includes("not enabled on your tailnet")) {
         console.error(colors.blue("Make sure Tailscale is connected:"));
         console.error(colors.cyan("  tailscale up"));
+      }
+      process.exit(1);
+    }
+  }
+
+  if (wantsNgrok) {
+    try {
+      ensureNgrokAvailable();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(colors.red(`Error: ${message}`));
+      if (message.includes("not found")) {
+        console.error(colors.blue("Install ngrok: https://ngrok.com/download"));
       }
       process.exit(1);
     }
@@ -1108,6 +1127,8 @@ async function runApp(
   // Readiness was already checked at the top of runApp().
   let tailscaleHttpsPort: number | undefined;
   let tailscaleUrl: string | undefined;
+  let ngrokUrl: string | undefined;
+  let ngrokProcess: Awaited<ReturnType<typeof startNgrok>> | undefined;
 
   if (wantsTailscale && tsBaseUrl) {
     const maxAttempts = 3;
@@ -1149,6 +1170,47 @@ async function runApp(
       });
     } catch {
       // Non-fatal: route display metadata only
+    }
+  }
+
+  if (wantsNgrok) {
+    try {
+      ngrokProcess = await startNgrok(port);
+      ngrokUrl = ngrokProcess.url;
+      console.log(chalk.green(`  ngrok -> ${ngrokUrl}`));
+      console.log(chalk.gray("  (accessible from the public internet via ngrok)\n"));
+
+      try {
+        store.updateRoute(hostname, {
+          ngrokUrl,
+          ngrokPid: ngrokProcess.pid,
+        });
+      } catch {
+        // Non-fatal: route display metadata only
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(colors.red(`Error: ${message}`));
+      if (message.includes("not found")) {
+        console.error(colors.blue("Install ngrok: https://ngrok.com/download"));
+      } else if (message.includes("authentication")) {
+        console.error(colors.blue("Configure ngrok authentication:"));
+        console.error(colors.cyan("  ngrok config add-authtoken <token>"));
+      }
+      try {
+        unregisterTailscale({
+          tailscaleHttpsPort,
+          tailscaleFunnel: wantsFunnel || undefined,
+        });
+      } catch {
+        // Best-effort cleanup; non-fatal
+      }
+      try {
+        store.removeRoute(hostname);
+      } catch {
+        // Best-effort cleanup; non-fatal
+      }
+      process.exit(1);
     }
   }
 
@@ -1208,9 +1270,11 @@ async function runApp(
       // own LAN discovery natively.
       ...(lanMode ? { PORTLESS_LAN: "1" } : {}),
       ...(tailscaleUrl ? { PORTLESS_TAILSCALE_URL: tailscaleUrl } : {}),
+      ...(ngrokUrl ? { PORTLESS_NGROK_URL: ngrokUrl } : {}),
       ...caEnv,
     },
     onCleanup: () => {
+      stopNgrokProcess(ngrokProcess?.child);
       try {
         unregisterTailscale({
           tailscaleHttpsPort,
@@ -1271,7 +1335,7 @@ function appPortFromEnv(): number | undefined {
   return port;
 }
 
-function applyTailscaleFlag(flag: string): boolean {
+function applySharingFlag(flag: string): boolean {
   if (flag === "--tailscale") {
     process.env.PORTLESS_TAILSCALE = "1";
     return true;
@@ -1279,6 +1343,10 @@ function applyTailscaleFlag(flag: string): boolean {
   if (flag === "--funnel") {
     process.env.PORTLESS_FUNNEL = "1";
     process.env.PORTLESS_TAILSCALE = "1";
+    return true;
+  }
+  if (flag === "--ngrok") {
+    process.env.PORTLESS_NGROK = "1";
     return true;
   }
   return false;
@@ -1315,6 +1383,9 @@ ${colors.bold("Options:")}
   --name <name>          Override the inferred base name (worktree prefix still applies)
   --force                Kill the existing process and take over its route
   --app-port <number>    Use a fixed port for the app (skip auto-assignment)
+  --tailscale            Share the app on your Tailscale network (tailnet)
+  --funnel               Share the app publicly via Tailscale Funnel
+  --ngrok                Share the app publicly via ngrok
   --help, -h             Show this help
 
 ${colors.bold("Name inference (in order):")}
@@ -1348,12 +1419,14 @@ ${colors.bold("Examples:")}
         process.exit(1);
       }
       name = args[i];
-    } else if (applyTailscaleFlag(args[i])) {
+    } else if (applySharingFlag(args[i])) {
       // handled
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
       console.error(
-        colors.blue("Known flags: --name, --force, --app-port, --tailscale, --funnel, --help")
+        colors.blue(
+          "Known flags: --name, --force, --app-port, --tailscale, --funnel, --ngrok, --help"
+        )
       );
       process.exit(1);
     }
@@ -1387,11 +1460,13 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
     } else if (args[i] === "--app-port") {
       i++;
       appPort = parseAppPort(args[i]);
-    } else if (applyTailscaleFlag(args[i])) {
+    } else if (applySharingFlag(args[i])) {
       // handled
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
-      console.error(colors.blue("Known flags: --force, --app-port, --tailscale, --funnel"));
+      console.error(
+        colors.blue("Known flags: --force, --app-port, --tailscale, --funnel, --ngrok")
+      );
       process.exit(1);
     }
     i++;
@@ -1411,11 +1486,13 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
     } else if (args[i] === "--app-port") {
       i++;
       appPort = parseAppPort(args[i]);
-    } else if (applyTailscaleFlag(args[i])) {
+    } else if (applySharingFlag(args[i])) {
       // handled
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
-      console.error(colors.blue("Known flags: --force, --app-port, --tailscale, --funnel"));
+      console.error(
+        colors.blue("Known flags: --force, --app-port, --tailscale, --funnel, --ngrok")
+      );
       process.exit(1);
     }
     i++;
@@ -1476,6 +1553,7 @@ ${colors.bold("Examples:")}
   portless get backend                # -> https://backend.localhost
   portless myapp --tailscale next dev # -> also https://<node>.ts.net (tailnet)
   portless myapp --funnel next dev    # -> also https://<node>.ts.net (public)
+  portless myapp --ngrok next dev     # -> also https://<random>.ngrok.app (public)
 
 ${colors.bold("Configuration (portless.json):")}
   Optional. Portless works out of the box by running the "dev" script
@@ -1537,6 +1615,11 @@ ${colors.bold("Tailscale sharing:")}
   ${colors.cyan("portless myapp --tailscale next dev")}
   ${colors.cyan("portless myapp --funnel next dev")}
 
+${colors.bold("ngrok sharing:")}
+  Use --ngrok to expose your dev server to the public internet with ngrok.
+  Requires the ngrok CLI to be installed and authenticated.
+  ${colors.cyan("portless myapp --ngrok next dev")}
+
 ${colors.bold("Options:")}
   run [--name <name>] <cmd>      Infer project name (or override with --name)
                                 Adds worktree prefix in git worktrees
@@ -1556,6 +1639,7 @@ ${colors.bold("Options:")}
   --app-port <number>           Use a fixed port for the app (skip auto-assignment)
   --tailscale                   Share the app on your Tailscale network (tailnet)
   --funnel                      Share the app publicly via Tailscale Funnel
+  --ngrok                       Share the app publicly via ngrok
   --force                       Kill the existing process and take over its route
   --name <name>                 Use <name> as the app name (bypasses subcommand dispatch)
   --                            Stop flag parsing; everything after is passed to the child
@@ -1571,6 +1655,7 @@ ${colors.bold("Environment variables:")}
   PORTLESS_SYNC_HOSTS=0         Disable auto-sync of ${HOSTS_DISPLAY} (on by default)
   PORTLESS_TAILSCALE=1          Share apps on your Tailscale network (same as --tailscale)
   PORTLESS_FUNNEL=1             Share apps publicly via Tailscale Funnel (same as --funnel)
+  PORTLESS_NGROK=1              Share apps publicly via ngrok (same as --ngrok)
   PORTLESS_STATE_DIR=<path>     Override the state directory
   PORTLESS=0                    Run command directly without proxy
 
@@ -1580,6 +1665,7 @@ ${colors.bold("Child process environment:")}
   PORTLESS_URL                  Public URL of the app (e.g. https://myapp.localhost)
   PORTLESS_LAN                  Set to 1 when proxy is in LAN mode
   PORTLESS_TAILSCALE_URL        Tailscale URL of the app (when --tailscale is active)
+  PORTLESS_NGROK_URL            ngrok URL of the app (when --ngrok is active)
   NODE_EXTRA_CA_CERTS           Path to the portless CA (set when HTTPS is active)
 
 ${colors.bold("Safari / DNS:")}
@@ -1722,6 +1808,10 @@ ${colors.bold("Options:")}
         // Tailscale may not be installed; non-fatal
       }
     }
+    if (route.ngrokPid) {
+      stopNgrok(route);
+      console.log(colors.green(`Stopped ngrok tunnel for ${route.hostname}.`));
+    }
   }
 
   const stateDirs = collectStateDirsForCleanup();
@@ -1810,6 +1900,10 @@ ${colors.bold("Options:")}
       } catch {
         // Tailscale CLI may not be installed; non-fatal during prune
       }
+    }
+    if (route.ngrokPid) {
+      stopNgrok(route);
+      console.log(`  ${route.hostname} - stopped ngrok tunnel`);
     }
   }
 
@@ -3449,6 +3543,9 @@ async function main() {
   if (stripGlobalFlag("--funnel", false)) {
     process.env.PORTLESS_FUNNEL = "1";
     process.env.PORTLESS_TAILSCALE = "1";
+  }
+  if (stripGlobalFlag("--ngrok", false)) {
+    process.env.PORTLESS_NGROK = "1";
   }
 
   // --script flag: override the default "dev" script for zero-arg mode.

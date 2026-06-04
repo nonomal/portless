@@ -60,8 +60,26 @@ portless docs.myapp next dev
       <td>`--force`</td>
       <td>Override an existing route registered by another process</td>
     </tr>
+    <tr>
+      <td>`--tailscale`</td>
+      <td>Share the app on your Tailscale network.</td>
+    </tr>
+    <tr>
+      <td>`--funnel`</td>
+      <td>Share the app publicly via Tailscale Funnel.</td>
+    </tr>
+    <tr>
+      <td>`--ngrok`</td>
+      <td>Share the app publicly via ngrok.</td>
+    </tr>
   </tbody>
 </table>
+
+```bash
+portless myapp --tailscale next dev
+portless myapp --funnel next dev
+portless myapp --ngrok next dev
+```
 
 ## Get a service URL
 

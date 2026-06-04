@@ -128,6 +128,9 @@ describe("CLI", () => {
       expect(stdout).toContain("--foreground");
       expect(stdout).toContain("PORTLESS_STATE_DIR");
       expect(stdout).toContain("PORTLESS_URL");
+      expect(stdout).toContain("--ngrok");
+      expect(stdout).toContain("PORTLESS_NGROK");
+      expect(stdout).toContain("PORTLESS_NGROK_URL");
       expect(stdout).toContain("portless clean");
     });
 
@@ -1416,6 +1419,55 @@ describe("CLI", () => {
         });
         expect(status).toBe(1);
         expect(stderr).toContain("Tailscale");
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("--ngrok flag", () => {
+    it("shows --ngrok in help output", () => {
+      const { status, stdout } = run(["--help"]);
+      expect(status).toBe(0);
+      expect(stdout).toContain("--ngrok");
+      expect(stdout).toContain("PORTLESS_NGROK");
+      expect(stdout).toContain("PORTLESS_NGROK_URL");
+    });
+
+    it("fails with actionable message when ngrok is not installed", () => {
+      const { status, stderr } = run(["--ngrok", "myapp", "echo", "hello"], {
+        env: { PATH: "/tmp/portless-no-ngrok-path" },
+      });
+      expect(status).toBe(1);
+      expect(stderr).toContain("ngrok CLI not found");
+    });
+
+    it("accepts PORTLESS_NGROK=1 env var", () => {
+      const { status, stderr } = run(["myapp", "echo", "hello"], {
+        env: { PORTLESS_NGROK: "1", PATH: "/tmp/portless-no-ngrok-path" },
+      });
+      expect(status).toBe(1);
+      expect(stderr).toContain("ngrok CLI not found");
+    });
+
+    it("accepts --ngrok after app name", () => {
+      const { status, stderr } = run(["myapp", "--ngrok", "echo", "hello"], {
+        env: { PATH: "/tmp/portless-no-ngrok-path" },
+      });
+      expect(status).toBe(1);
+      expect(stderr).toContain("ngrok CLI not found");
+    });
+
+    it("accepts --ngrok in run subcommand", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-cli-ngrok-run-"));
+      try {
+        fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "test-app" }));
+        const { status, stderr } = run(["run", "--ngrok", "echo", "hello"], {
+          cwd: tmpDir,
+          env: { PATH: "/tmp/portless-no-ngrok-path" },
+        });
+        expect(status).toBe(1);
+        expect(stderr).toContain("ngrok CLI not found");
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }

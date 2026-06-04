@@ -26,6 +26,8 @@ export interface RouteMapping extends RouteInfo {
   tailscaleUrl?: string;
   tailscaleHttpsPort?: number;
   tailscaleFunnel?: boolean;
+  ngrokUrl?: string;
+  ngrokPid?: number;
 }
 
 /** Runtime check that a parsed JSON value is a valid RouteMapping. */
@@ -301,7 +303,12 @@ export class RouteStore {
    */
   updateRoute(
     hostname: string,
-    fields: Partial<Pick<RouteMapping, "tailscaleUrl" | "tailscaleHttpsPort" | "tailscaleFunnel">>
+    fields: Partial<
+      Pick<
+        RouteMapping,
+        "tailscaleUrl" | "tailscaleHttpsPort" | "tailscaleFunnel" | "ngrokUrl" | "ngrokPid"
+      >
+    >
   ): void {
     this.ensureDir();
     if (!this.acquireLock()) {
@@ -315,6 +322,8 @@ export class RouteStore {
       if (fields.tailscaleHttpsPort !== undefined)
         route.tailscaleHttpsPort = fields.tailscaleHttpsPort;
       if (fields.tailscaleFunnel !== undefined) route.tailscaleFunnel = fields.tailscaleFunnel;
+      if (fields.ngrokUrl !== undefined) route.ngrokUrl = fields.ngrokUrl;
+      if (fields.ngrokPid !== undefined) route.ngrokPid = fields.ngrokPid;
       this.saveRoutes(routes);
     } finally {
       this.releaseLock();

@@ -183,6 +183,7 @@ Portless stores its state (routes, PID file, port file) in `~/.portless`. Overri
 | `PORTLESS_SYNC_HOSTS` | Set to `0` to disable auto-sync of /etc/hosts (on by default)               |
 | `PORTLESS_TAILSCALE`  | Set to `1` to share apps on your Tailscale network (same as `--tailscale`)  |
 | `PORTLESS_FUNNEL`     | Set to `1` to share apps publicly via Tailscale Funnel (same as `--funnel`) |
+| `PORTLESS_NGROK`      | Set to `1` to share apps publicly via ngrok (same as `--ngrok`)             |
 | `PORTLESS_STATE_DIR`  | Override the state directory                                                |
 | `PORTLESS=0`          | Bypass the proxy, run the command directly                                  |
 
@@ -241,6 +242,18 @@ Tailscale HTTPS certificates must be enabled before `--tailscale` or `--funnel` 
 
 Each `--tailscale` app is root-mounted on its own Tailscale HTTPS port (443, then 8443, 8444, etc.) so no framework `basePath` configuration is needed. Set `PORTLESS_TAILSCALE=1` to share every app by default. `portless list` shows both local and tailnet URLs. Tailscale serve registrations are cleaned up when the app exits. Requires `tailscale` CLI installed and connected, with Tailscale HTTPS certificates enabled.
 
+### ngrok sharing
+
+Expose a dev server to the public internet with ngrok using `--ngrok`:
+
+```bash
+portless myapp --ngrok next dev
+# -> https://myapp.localhost           (local)
+# -> https://abc123.ngrok.app          (public internet)
+```
+
+Set `PORTLESS_NGROK=1` to enable ngrok by default when portless runs an app. `portless list` shows both local and ngrok URLs. The ngrok tunnel is cleaned up when the app exits. Requires the `ngrok` CLI to be installed and authenticated with `ngrok config add-authtoken <token>`.
+
 ## OS startup service
 
 Use the service command when users want the proxy to start automatically after reboot:
@@ -296,6 +309,7 @@ The chosen service configuration is written into launchd, systemd, or Task Sched
 | `portless <name> --app-port <n> <cmd>` | Use a fixed port for the app instead of auto-assignment        |
 | `portless <name> --tailscale <cmd>`    | Share the app on your Tailscale network (tailnet)              |
 | `portless <name> --funnel <cmd>`       | Share the app publicly via Tailscale Funnel                    |
+| `portless <name> --ngrok <cmd>`        | Share the app publicly via ngrok                               |
 | `portless <name> --force <cmd>`        | Kill the existing process and take over its route              |
 | `portless --name <name> <cmd>`         | Force `<name>` as app name (bypasses subcommand dispatch)      |
 | `portless <name> -- <cmd> [args...]`   | Stop flag parsing; everything after `--` is passed to child    |
@@ -434,9 +448,21 @@ tailscale up         # Connect to your tailnet
 
 Requires the Tailscale CLI to be installed (https://tailscale.com/download) and on PATH.
 
+### ngrok not working
+
+If `--ngrok` fails:
+
+```bash
+ngrok version                         # Check if installed
+ngrok config add-authtoken <token>    # Configure authentication
+```
+
+Requires the ngrok CLI to be installed (https://ngrok.com/download) and on PATH.
+
 ### Requirements
 
 - Node.js 24+
 - macOS, Linux, or Windows
 - `openssl` (for `--https` cert generation; ships with macOS and most Linux distributions; on Windows, install via `winget install -e --id ShiningLight.OpenSSL.Dev` or use the copy bundled with Git for Windows)
 - `tailscale` CLI (optional, for `--tailscale` and `--funnel`)
+- `ngrok` CLI (optional, for `--ngrok`)
