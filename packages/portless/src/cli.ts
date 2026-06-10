@@ -997,7 +997,8 @@ async function runApp(
   autoInfo?: { nameSource: string; prefix?: string; prefixSource?: string },
   desiredPort?: number,
   lanMode = false,
-  lanIp?: string | null
+  lanIp?: string | null,
+  childEnv: Record<string, string> = {}
 ) {
   let store = initialStore;
   console.log(chalk.blue.bold(`\nportless\n`));
@@ -1290,12 +1291,10 @@ async function runApp(
   // Server Components) trust portless-proxied HTTPS services. Node.js does
   // not use the system trust store, so without this env var it rejects the
   // portless CA as "self-signed certificate in certificate chain".
-  // Respect any value the user already set. Note: we check process.env here
-  // rather than the constructed child env because the child env inherits from
-  // process.env via spread. If a future code path injects NODE_EXTRA_CA_CERTS
-  // into the child env independently, this guard would need updating.
+  // Respect any value the user already set, including child scoped assignments.
   const caEnv: Record<string, string> = {};
-  if (tls && !process.env.NODE_EXTRA_CA_CERTS) {
+  const childBaseEnv = { ...process.env, ...childEnv };
+  if (tls && !childBaseEnv.NODE_EXTRA_CA_CERTS) {
     const caPath = path.join(stateDir, "ca.pem");
     if (fs.existsSync(caPath)) {
       caEnv.NODE_EXTRA_CA_CERTS = caPath;
@@ -1315,6 +1314,7 @@ async function runApp(
   spawnCommand(commandArgs, {
     env: {
       ...process.env,
+      ...childEnv,
       PORT: port.toString(),
       ...(hostBind ? { HOST: hostBind } : {}),
       PORTLESS_URL: finalUrl,
@@ -1357,6 +1357,8 @@ interface ParsedRunArgs {
   appPort?: number;
   /** Override the inferred base name (from --name flag). */
   name?: string;
+  /** Environment assignments applied only to the child process. */
+  childEnv: Record<string, string>;
   /** The child command and its arguments, passed through untouched. */
   commandArgs: string[];
 }
@@ -1391,19 +1393,23 @@ function appPortFromEnv(): number | undefined {
 }
 
 /**
- * Hoist leading `VAR=val` tokens from a child command into the environment,
- * matching shell semantics: `portless myapp API_URL=x node server.js` behaves
- * like `API_URL=x portless myapp node server.js`. Without this the first
- * token would be executed as a program literally named `API_URL=x`.
+ * Pull leading `VAR=val` tokens out of a child command.
+ * Without this the first token would be executed as a program literally named
+ * `API_URL=x`. The assignments are kept out of process.env so they cannot
+ * configure portless itself before the child process starts.
  */
-function hoistEnvAssignments(commandArgs: string[]): string[] {
+function hoistEnvAssignments(commandArgs: string[]): {
+  commandArgs: string[];
+  childEnv: Record<string, string>;
+} {
   let i = 0;
+  const childEnv: Record<string, string> = {};
   while (i < commandArgs.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(commandArgs[i])) {
     const eq = commandArgs[i].indexOf("=");
-    process.env[commandArgs[i].slice(0, eq)] = commandArgs[i].slice(eq + 1);
+    childEnv[commandArgs[i].slice(0, eq)] = commandArgs[i].slice(eq + 1);
     i++;
   }
-  return commandArgs.slice(i);
+  return { commandArgs: commandArgs.slice(i), childEnv };
 }
 
 function applySharingFlag(flag: string): boolean {
@@ -1518,8 +1524,10 @@ ${colors.bold("Examples:")}
 
   // An explicit `--` means "pass everything through untouched" — skip env
   // assignment hoisting so the documented escape hatch stays literal.
-  const commandArgs = passthrough ? args.slice(i) : hoistEnvAssignments(args.slice(i));
-  return { force, appPort, name, commandArgs };
+  const parsedCommand = passthrough
+    ? { commandArgs: args.slice(i), childEnv: {} }
+    : hoistEnvAssignments(args.slice(i));
+  return { force, appPort, name, ...parsedCommand };
 }
 
 /**
@@ -1605,8 +1613,10 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
 
   // An explicit `--` means "pass everything through untouched" — skip env
   // assignment hoisting so the documented escape hatch stays literal.
-  const commandArgs = passthrough ? args.slice(i) : hoistEnvAssignments(args.slice(i));
-  return { force, appPort, name, commandArgs };
+  const parsedCommand = passthrough
+    ? { commandArgs: args.slice(i), childEnv: {} }
+    : hoistEnvAssignments(args.slice(i));
+  return { force, appPort, name, ...parsedCommand };
 }
 
 // ---------------------------------------------------------------------------
@@ -3521,7 +3531,8 @@ async function handleRunMode(args: string[], globalScript?: string): Promise<voi
     { nameSource, prefix: worktree?.prefix, prefixSource: worktree?.source },
     parsed.appPort,
     lanMode,
-    lanIp
+    lanIp,
+    parsed.childEnv
   );
 }
 
@@ -3567,7 +3578,8 @@ async function handleNamedMode(args: string[]): Promise<void> {
     undefined,
     parsed.appPort,
     lanMode,
-    lanIp
+    lanIp,
+    parsed.childEnv
   );
 }
 
@@ -3684,12 +3696,12 @@ async function main() {
       process.env.PORTLESS === "false" ||
       process.env.PORTLESS === "skip";
     if (skipPortless) {
-      const { commandArgs } = parseAppArgs(args);
-      if (commandArgs.length === 0) {
+      const parsed = parseAppArgs(args);
+      if (parsed.commandArgs.length === 0) {
         console.error(colors.red("Error: No command provided."));
         process.exit(1);
       }
-      spawnCommand(commandArgs);
+      spawnCommand(parsed.commandArgs, { env: { ...process.env, ...parsed.childEnv } });
       return;
     }
     await handleNamedMode(args);
@@ -3724,7 +3736,7 @@ async function main() {
       console.error(colors.red("Error: No command provided."));
       process.exit(1);
     }
-    spawnCommand(commandArgs);
+    spawnCommand(commandArgs, { env: { ...process.env, ...parsed.childEnv } });
     return;
   }
 

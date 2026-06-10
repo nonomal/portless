@@ -316,6 +316,51 @@ describe("CLI", () => {
       expect(stdout.trim()).toBe("12");
     });
 
+    it("does not apply PORTLESS_* child assignments to portless itself", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-env-scope-"));
+      const fakeBinDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-fake-tailscale-"));
+      const proxyPort = await getFreePort();
+      const fakeMessage = "fake tailscale should not run";
+      const env = {
+        PORTLESS_STATE_DIR: tmpDir,
+        PORTLESS_PORT: String(proxyPort),
+        PORTLESS_HTTPS: "0",
+        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      };
+
+      try {
+        if (process.platform === "win32") {
+          fs.writeFileSync(
+            path.join(fakeBinDir, "tailscale.cmd"),
+            `@echo off\r\necho ${fakeMessage} 1>&2\r\nexit /b 42\r\n`
+          );
+        } else {
+          const shimPath = path.join(fakeBinDir, "tailscale");
+          fs.writeFileSync(shimPath, `#!/bin/sh\necho "${fakeMessage}" >&2\nexit 42\n`);
+          fs.chmodSync(shimPath, 0o755);
+        }
+
+        const { status, stdout, stderr } = run(
+          [
+            "myapp",
+            "PORTLESS_TAILSCALE=1",
+            "node",
+            "-e",
+            "process.stdout.write(process.env.PORTLESS_TAILSCALE || '')",
+          ],
+          { env }
+        );
+
+        expect(status).toBe(0);
+        expect(stdout).toContain("1");
+        expect(stderr).not.toContain(fakeMessage);
+      } finally {
+        run(["proxy", "stop"], { env });
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        fs.rmSync(fakeBinDir, { recursive: true, force: true });
+      }
+    });
+
     it("does not hoist after an explicit -- separator", () => {
       const { stdout } = run(["myapp", "--", "C=3", "echo", "untouched"], {
         env: { PORTLESS: "0" },
