@@ -1256,6 +1256,18 @@ describe("CLI", () => {
       expect(start2.stdout).toContain("already running");
     });
 
+    it("clears wildcard mode marker when the proxy stops", () => {
+      const markerPath = path.join(tmpDir, "proxy.wildcard");
+      const start = run(["proxy", "start", "--wildcard"], { env: proxyEnv() });
+      expect(start.status).toBe(0);
+      expect(fs.existsSync(markerPath)).toBe(true);
+
+      const stop = run(["proxy", "stop"], { env: proxyEnv() });
+      expect(stop.status).toBe(0);
+      expect(stop.stdout).toContain("Proxy stopped");
+      expect(fs.existsSync(markerPath)).toBe(false);
+    });
+
     it("stops proxy using explicit -p flag instead of env var", () => {
       const start = run(["proxy", "start"], { env: proxyEnv() });
       expect(start.status).toBe(0);
