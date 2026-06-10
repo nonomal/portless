@@ -280,6 +280,14 @@ function getProxyConfigMismatchMessages(
     );
   }
 
+  if (explicit.useWildcard && desiredConfig.useWildcard !== actualConfig.useWildcard) {
+    messages.push(
+      desiredConfig.useWildcard
+        ? "requested wildcard subdomain routing, but the running proxy is using strict matching"
+        : "requested strict subdomain matching, but the running proxy is using wildcard routing"
+    );
+  }
+
   return messages;
 }
 
@@ -1381,6 +1389,22 @@ function appPortFromEnv(): number | undefined {
   return port;
 }
 
+/**
+ * Hoist leading `VAR=val` tokens from a child command into the environment,
+ * matching shell semantics: `portless myapp API_URL=x node server.js` behaves
+ * like `API_URL=x portless myapp node server.js`. Without this the first
+ * token would be executed as a program literally named `API_URL=x`.
+ */
+function hoistEnvAssignments(commandArgs: string[]): string[] {
+  let i = 0;
+  while (i < commandArgs.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(commandArgs[i])) {
+    const eq = commandArgs[i].indexOf("=");
+    process.env[commandArgs[i].slice(0, eq)] = commandArgs[i].slice(eq + 1);
+    i++;
+  }
+  return commandArgs.slice(i);
+}
+
 function applySharingFlag(flag: string): boolean {
   if (flag === "--tailscale") {
     process.env.PORTLESS_TAILSCALE = "1";
@@ -1409,10 +1433,12 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   let force = false;
   let appPort: number | undefined;
   let name: string | undefined;
+  let passthrough = false;
   let i = 0;
 
   while (i < args.length && args[i].startsWith("-")) {
     if (args[i] === "--") {
+      passthrough = true;
       i++;
       break;
     } else if (args[i] === "--help" || args[i] === "-h") {
@@ -1467,6 +1493,14 @@ ${colors.bold("Examples:")}
       name = args[i];
     } else if (applySharingFlag(args[i])) {
       // handled
+    } else if (args[i] === "--wildcard") {
+      console.error(colors.red(`Error: "--wildcard" is a proxy-level option, not a per-app flag.`));
+      console.error(
+        colors.blue(
+          "Enable it on the proxy: portless proxy stop && portless proxy start --wildcard"
+        )
+      );
+      process.exit(1);
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
       console.error(
@@ -1481,7 +1515,10 @@ ${colors.bold("Examples:")}
 
   if (!appPort) appPort = appPortFromEnv();
 
-  return { force, appPort, name, commandArgs: args.slice(i) };
+  // An explicit `--` means "pass everything through untouched" — skip env
+  // assignment hoisting so the documented escape hatch stays literal.
+  const commandArgs = passthrough ? args.slice(i) : hoistEnvAssignments(args.slice(i));
+  return { force, appPort, name, commandArgs };
 }
 
 /**
@@ -1494,11 +1531,13 @@ ${colors.bold("Examples:")}
 function parseAppArgs(args: string[]): ParsedAppArgs {
   let force = false;
   let appPort: number | undefined;
+  let passthrough = false;
   let i = 0;
 
   // Consume leading flags before name
   while (i < args.length && args[i].startsWith("-")) {
     if (args[i] === "--") {
+      passthrough = true;
       i++;
       break;
     } else if (args[i] === "--force") {
@@ -1508,6 +1547,14 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
       appPort = parseAppPort(args[i]);
     } else if (applySharingFlag(args[i])) {
       // handled
+    } else if (args[i] === "--wildcard") {
+      console.error(colors.red(`Error: "--wildcard" is a proxy-level option, not a per-app flag.`));
+      console.error(
+        colors.blue(
+          "Enable it on the proxy: portless proxy stop && portless proxy start --wildcard"
+        )
+      );
+      process.exit(1);
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
       console.error(
@@ -1525,6 +1572,7 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
   // Allow flags immediately after name (e.g. `portless myapp --force next dev`)
   while (i < args.length && args[i].startsWith("--")) {
     if (args[i] === "--") {
+      passthrough = true;
       i++;
       break;
     } else if (args[i] === "--force") {
@@ -1534,6 +1582,14 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
       appPort = parseAppPort(args[i]);
     } else if (applySharingFlag(args[i])) {
       // handled
+    } else if (args[i] === "--wildcard") {
+      console.error(colors.red(`Error: "--wildcard" is a proxy-level option, not a per-app flag.`));
+      console.error(
+        colors.blue(
+          "Enable it on the proxy: portless proxy stop && portless proxy start --wildcard"
+        )
+      );
+      process.exit(1);
     } else {
       console.error(colors.red(`Error: Unknown flag "${args[i]}".`));
       console.error(
@@ -1546,7 +1602,10 @@ function parseAppArgs(args: string[]): ParsedAppArgs {
 
   if (!appPort) appPort = appPortFromEnv();
 
-  return { force, appPort, name, commandArgs: args.slice(i) };
+  // An explicit `--` means "pass everything through untouched" — skip env
+  // assignment hoisting so the documented escape hatch stays literal.
+  const commandArgs = passthrough ? args.slice(i) : hoistEnvAssignments(args.slice(i));
+  return { force, appPort, name, commandArgs };
 }
 
 // ---------------------------------------------------------------------------
@@ -1680,7 +1739,7 @@ ${colors.bold("Options:")}
   --key <path>                  Use a custom TLS private key
   --foreground                  Run proxy in foreground (for debugging)
   --tld <tld>                   Use a custom TLD instead of .localhost (e.g. test, dev)
-  --wildcard                    Allow unregistered subdomains to fall back to parent route
+  --wildcard                    Allow unregistered subdomains to fall back to parent route (proxy start / service install only)
   --state-dir <path>            Use a custom state directory with service install
   --app-port <number>           Use a fixed port for the app (skip auto-assignment)
   --tailscale                   Share the app on your Tailscale network (tailnet)
@@ -3693,11 +3752,18 @@ async function main() {
       await handlePrune(args);
       return;
     }
-    if (args[0] === "list") {
+    // `ls`, `status`, and `url` are aliases for `list` and `get`, but only
+    // when the argument shape matches the subcommand — `portless ls next dev`
+    // is an app named "ls" running a command, and existing workflows built on
+    // those names keep working.
+    if (
+      args[0] === "list" ||
+      ((args[0] === "ls" || args[0] === "status") && args.slice(1).every((a) => a.startsWith("-")))
+    ) {
       await handleList();
       return;
     }
-    if (args[0] === "get") {
+    if (args[0] === "get" || (args[0] === "url" && args.slice(2).every((a) => a.startsWith("-")))) {
       await handleGet(args);
       return;
     }

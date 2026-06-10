@@ -288,6 +288,90 @@ describe("CLI", () => {
     });
   });
 
+  describe("env assignments before the child command", () => {
+    it("hoists VAR=val tokens into the child environment (named mode)", () => {
+      const { status, stdout } = run(
+        ["myapp", "GREETING=hi", "node", "-e", "console.log(process.env.GREETING)"],
+        { env: { PORTLESS: "0" } }
+      );
+      expect(status).toBe(0);
+      expect(stdout.trim()).toBe("hi");
+    });
+
+    it("hoists VAR=val tokens in run mode", () => {
+      const { status, stdout } = run(
+        ["run", "GREETING=hello", "node", "-e", "console.log(process.env.GREETING)"],
+        { env: { PORTLESS: "0" } }
+      );
+      expect(status).toBe(0);
+      expect(stdout.trim()).toBe("hello");
+    });
+
+    it("hoists multiple assignments and keeps the rest of the command intact", () => {
+      const { status, stdout } = run(
+        ["myapp", "A=1", "B=2", "node", "-e", "console.log(process.env.A + process.env.B)"],
+        { env: { PORTLESS: "0" } }
+      );
+      expect(status).toBe(0);
+      expect(stdout.trim()).toBe("12");
+    });
+
+    it("does not hoist after an explicit -- separator", () => {
+      const { stdout } = run(["myapp", "--", "C=3", "echo", "untouched"], {
+        env: { PORTLESS: "0" },
+      });
+      // The command after -- is passed through literally, so the first token
+      // is executed as a (nonexistent) program instead of being hoisted.
+      expect(stdout.trim()).not.toBe("untouched");
+    });
+  });
+
+  describe("command aliases", () => {
+    it("treats ls as list", () => {
+      expect(run(["ls"]).status).toBe(0);
+    });
+
+    it("treats status as list", () => {
+      expect(run(["status"]).status).toBe(0);
+    });
+
+    it("treats url as get", () => {
+      const { status, stdout } = run(["url", "--help"]);
+      expect(status).toBe(0);
+      expect(stdout).toContain("portless get");
+    });
+
+    it("still runs an app named ls when a command follows", () => {
+      const { status, stdout } = run(["ls", "echo", "app-named-ls"], {
+        env: { PORTLESS: "0" },
+      });
+      expect(status).toBe(0);
+      expect(stdout.trim()).toBe("app-named-ls");
+    });
+
+    it("still runs an app named url when a command follows", () => {
+      const { status, stdout } = run(["url", "echo", "app-named-url"], {
+        env: { PORTLESS: "0" },
+      });
+      expect(status).toBe(0);
+      expect(stdout.trim()).toBe("app-named-url");
+    });
+  });
+
+  describe("--wildcard misplacement hint", () => {
+    it("redirects --wildcard to proxy start in named mode", () => {
+      const { status, stderr } = run(["myapp", "--wildcard", "echo", "x"]);
+      expect(status).toBe(1);
+      expect(stderr).toContain("proxy start --wildcard");
+    });
+
+    it("redirects --wildcard to proxy start in run mode", () => {
+      const { status, stderr } = run(["run", "--wildcard", "echo", "x"]);
+      expect(status).toBe(1);
+      expect(stderr).toContain("proxy start --wildcard");
+    });
+  });
+
   describe("--force positioning", () => {
     it("accepts --force before name (PORTLESS=0)", () => {
       const { status, stdout } = run(["--force", "myapp", "echo", "ok"], {

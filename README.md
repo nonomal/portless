@@ -386,7 +386,7 @@ portless service uninstall       # Remove the startup service
 --key <path>                     Use a custom TLS private key
 --foreground                     Run proxy in foreground instead of daemon
 --tld <tld>                      Use a custom TLD instead of .localhost (e.g. test)
---wildcard                       Allow unregistered subdomains to fall back to parent route
+--wildcard                       Allow unregistered subdomains to fall back to parent route (proxy start / service install only)
 --state-dir <path>               Use a custom state directory with service install
 --script <name>                  Run a specific package.json script (default: dev)
 --app-port <number>              Use a fixed port for the app (skip auto-assignment)
