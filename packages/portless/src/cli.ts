@@ -56,6 +56,7 @@ import {
   readPersistedProxyState,
   readTldFromDir,
   readTlsMarker,
+  readWildcardMarker,
   resolveStateDir,
   spawnCommand,
   augmentedPath,
@@ -64,6 +65,7 @@ import {
   writeLanMarker,
   writeTldFile,
   writeTlsMarker,
+  writeWildcardMarker,
 } from "./cli-utils.js";
 import { collectStateDirsForCleanup, removePortlessStateFiles } from "./clean-utils.js";
 import {
@@ -241,7 +243,7 @@ function readCurrentProxyConfig(dir: string): ProxyConfig {
     lanIp,
     lanIpExplicit: false,
     tld,
-    useWildcard: false,
+    useWildcard: readWildcardMarker(dir),
   };
 }
 
@@ -596,6 +598,7 @@ function startProxyServer(
     writeTlsMarker(store.dir, isTls);
     writeTldFile(store.dir, tld);
     writeLanMarker(store.dir, activeLanIp);
+    writeWildcardMarker(store.dir, strict === false);
     fixOwnership(store.dir, store.pidPath, store.portFilePath);
     const proto = isTls ? "HTTPS/2" : "HTTP";
     const tldLabel = tld !== DEFAULT_TLD ? ` (TLD: .${tld})` : "";
@@ -909,6 +912,9 @@ async function ensureProxyRunning(
     }
     if (!explicit.lanMode && persisted.lanMode !== desiredConfig.lanMode) {
       startConfig.lanMode = persisted.lanMode;
+    }
+    if (!explicit.useWildcard && persisted.useWildcard !== desiredConfig.useWildcard) {
+      startConfig.useWildcard = persisted.useWildcard;
     }
     const envPort = getDefaultPort(startConfig.useHttps);
     if (persisted.port !== envPort) {
@@ -1632,13 +1638,14 @@ ${colors.bold("Usage:")}
   ${colors.cyan("portless run")}                     Same as above
   ${colors.cyan("portless run <cmd>")}               Run a command through the proxy
   ${colors.cyan("portless <name> <cmd>")}            Run with an explicit app name
+  ${colors.cyan("portless <name> VAR=val <cmd>")}    Apply env assignments to the child command
   ${colors.cyan("portless proxy start")}             Start the proxy (HTTPS on port 443, daemon); rarely needed since it auto-starts on first run
   ${colors.cyan("portless proxy stop")}              Stop the proxy
   ${colors.cyan("portless service install")}         Start proxy automatically when the OS starts
-  ${colors.cyan("portless get <name>")}              Print URL for a service (for cross-service refs)
+  ${colors.cyan("portless get <name>")}              Print URL for a service; alias: url
   ${colors.cyan("portless alias <name> <port>")}     Register a static route (e.g. for Docker)
   ${colors.cyan("portless alias --remove <name>")}   Remove a static route
-  ${colors.cyan("portless list")}                    Show active routes
+  ${colors.cyan("portless list")}                    Show active routes; aliases: ls, status
   ${colors.cyan("portless trust")}                   Add local CA to system trust store
   ${colors.cyan("portless clean")}                   Remove portless state, trust entry, and hosts block
   ${colors.cyan("portless prune")}                   Kill orphaned dev servers from crashed sessions
@@ -1650,12 +1657,14 @@ ${colors.bold("Examples:")}
   portless                            # From monorepo root: start all apps
   portless --script start             # Run "start" script instead of "dev"
   portless myapp next dev             # -> https://myapp.localhost
+  portless myapp API_URL=x next dev   # API_URL is set for the child command
   portless run next dev               # -> https://<project>.localhost
   portless run next dev               # in worktree -> https://<worktree>.<project>.localhost
   portless service install            # Start HTTPS proxy on OS startup
   portless service install --lan      # Persist LAN mode in the startup service
   portless service install --wildcard # Persist wildcard routing in the startup service
   portless get backend                # -> https://backend.localhost
+  portless url backend                # Alias for "portless get backend"
   portless myapp --tailscale next dev # -> also https://<node>.ts.net (tailnet)
   portless myapp --funnel next dev    # -> also https://<node>.ts.net (public)
   portless myapp --ngrok next dev     # -> also https://<random>.ngrok.app (public)
@@ -2463,6 +2472,9 @@ ${colors.bold("LAN mode (--lan):")}
     tld,
     useWildcard,
   });
+  if (!explicit.useWildcard) {
+    desiredConfig.useWildcard = readWildcardMarker(stateDir);
+  }
   const lanMode = desiredConfig.lanMode;
   useHttps = desiredConfig.useHttps;
   customCertPath = desiredConfig.customCertPath;

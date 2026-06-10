@@ -664,6 +664,39 @@ describe("CLI", () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    it("does not warn when a running proxy is already using wildcard mode", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-cli-wildcard-proxy-"));
+      const server = http.createServer((_req, res) => {
+        res.setHeader("X-Portless", "1");
+        res.end("ok");
+      });
+
+      try {
+        const proxyPort = await new Promise<number>((resolve) => {
+          server.listen(0, "127.0.0.1", () => {
+            const addr = server.address();
+            if (addr && typeof addr !== "string") {
+              resolve(addr.port);
+            }
+          });
+        });
+
+        fs.writeFileSync(path.join(tmpDir, "proxy.port"), proxyPort.toString());
+        fs.writeFileSync(path.join(tmpDir, "proxy.wildcard"), "1");
+
+        const { status, stdout, stderr } = run(["proxy", "start", "--wildcard"], {
+          env: { PORTLESS_STATE_DIR: tmpDir, PORTLESS_HTTPS: "0" },
+        });
+
+        expect(status).toBe(0);
+        expect(stdout).toContain("Proxy is already running on port");
+        expect(stderr).not.toContain("requested wildcard subdomain routing");
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("persisted LAN marker", () => {
