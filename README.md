@@ -379,6 +379,8 @@ portless service status          # Show service and proxy status
 portless service uninstall       # Remove the startup service
 ```
 
+`portless url <name>` is a convenience alias for `portless get <name>`. If the single argument after `url` is an installed command, portless treats it as an app named `url` instead. Use `portless get <name>` when a service name also matches a command.
+
 ### Options
 
 ```

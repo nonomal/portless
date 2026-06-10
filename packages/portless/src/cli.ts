@@ -1429,6 +1429,41 @@ function applySharingFlag(flag: string): boolean {
   return false;
 }
 
+function isExecutableFile(filePath: string): boolean {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return false;
+    if (isWindows) return true;
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commandExists(command: string): boolean {
+  if (!command || command.includes("/") || command.includes("\\")) {
+    return isExecutableFile(path.resolve(command));
+  }
+
+  const pathValue = augmentedPath(process.env);
+  const extensions = isWindows
+    ? ["", ...(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)].map(
+        (ext) => ext.toLowerCase()
+      )
+    : [""];
+
+  for (const dir of pathValue.split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of extensions) {
+      const candidate = path.join(dir, isWindows ? command + ext : command);
+      if (isExecutableFile(candidate)) return true;
+    }
+  }
+
+  return false;
+}
+
 function isUrlGetAliasShape(args: string[]): boolean {
   if (args[0] !== "url") return false;
 
@@ -1437,13 +1472,23 @@ function isUrlGetAliasShape(args: string[]): boolean {
   if (rest.includes("--help") || rest.includes("-h")) return true;
 
   let positionals = 0;
+  let serviceName: string | undefined;
+  let hasGetFlag = false;
   for (const arg of rest) {
-    if (arg === "--no-worktree") continue;
+    if (arg === "--no-worktree") {
+      hasGetFlag = true;
+      continue;
+    }
     if (arg.startsWith("-")) return false;
+    serviceName = arg;
     positionals++;
   }
 
-  return positionals <= 1;
+  if (positionals === 0) return true;
+  if (positionals > 1) return false;
+  if (hasGetFlag) return true;
+
+  return serviceName === undefined || !commandExists(serviceName);
 }
 
 /**
@@ -2101,6 +2146,11 @@ ${colors.bold("Examples:")}
   portless get backend                  # -> https://backend.localhost
   portless get backend                  # in worktree -> https://auth.backend.localhost
   portless get backend --no-worktree    # -> https://backend.localhost (skip worktree)
+
+${colors.bold("Alias note:")}
+  "url" is a convenience alias for "get". If the single argument is an
+  installed command, portless treats it as an app named "url" instead.
+  Use "portless get <name>" when a service name also matches a command.
 `);
     process.exit(0);
   }

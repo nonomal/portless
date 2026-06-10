@@ -318,6 +318,8 @@ The chosen service configuration is written into launchd, systemd, or Task Sched
 | `portless run --help`                  | Show help for a subcommand (also: alias, hosts, clean)                      |
 | `portless --version` / `-v`            | Show version                                                                |
 
+`portless url <name>` is a convenience alias for `portless get <name>`. If the single argument after `url` is an installed command, portless treats it as an app named `url` instead. Use `portless get <name>` when a service name also matches a command.
+
 **Reserved names:** `run`, `get`, `alias`, `hosts`, `list`, `trust`, `clean`, `prune`, `proxy`, and `service` are subcommands and cannot be used as app names directly. Use `portless run <cmd>` to infer the name, or `portless --name <name> <cmd>` to force any name including reserved ones.
 
 ## portless.json

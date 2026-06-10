@@ -41,6 +41,13 @@ function run(args: string[], options?: { env?: Record<string, string | undefined
   if (env.npm_command === "exec") {
     delete env.npm_command;
   }
+  if (process.platform === "win32" && "PATH" in env) {
+    for (const key of Object.keys(env)) {
+      if (key !== "PATH" && key.toUpperCase() === "PATH") {
+        delete env[key];
+      }
+    }
+  }
   const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
     encoding: "utf-8",
     timeout: 10_000,
@@ -52,6 +59,14 @@ function run(args: string[], options?: { env?: Record<string, string | undefined
     stdout: result.stdout,
     stderr: result.stderr,
   };
+}
+
+function inheritedPath(): string {
+  return process.env.PATH ?? process.env.Path ?? "";
+}
+
+function prependPath(dir: string): string {
+  return `${dir}${path.delimiter}${inheritedPath()}`;
 }
 
 function writeExpoShim(dir: string): void {
@@ -325,7 +340,7 @@ describe("CLI", () => {
         PORTLESS_STATE_DIR: tmpDir,
         PORTLESS_PORT: String(proxyPort),
         PORTLESS_HTTPS: "0",
-        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        PATH: prependPath(fakeBinDir),
       };
 
       try {
@@ -400,6 +415,54 @@ describe("CLI", () => {
       });
       expect(status).toBe(0);
       expect(stdout.trim()).toBe("app-named-url");
+    });
+
+    it("still runs an app named url with a one token command when that command exists", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-url-alias-state-"));
+      const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-url-alias-bin-"));
+      const server = http.createServer((_req, res) => {
+        res.setHeader("X-Portless", "1");
+        res.end("ok");
+      });
+      const commandName = "portless-url-command";
+
+      try {
+        const proxyPort = await new Promise<number>((resolve) => {
+          server.listen(0, "127.0.0.1", () => {
+            const addr = server.address();
+            if (addr && typeof addr !== "string") {
+              resolve(addr.port);
+            }
+          });
+        });
+
+        fs.writeFileSync(path.join(tmpDir, "proxy.port"), proxyPort.toString());
+        if (process.platform === "win32") {
+          fs.writeFileSync(
+            path.join(shimDir, `${commandName}.cmd`),
+            "@echo off\r\necho app-named-url-single\r\n"
+          );
+        } else {
+          const shimPath = path.join(shimDir, commandName);
+          fs.writeFileSync(shimPath, "#!/bin/sh\necho app-named-url-single\n");
+          fs.chmodSync(shimPath, 0o755);
+        }
+
+        const { status, stdout } = run(["url", commandName], {
+          env: {
+            PATH: prependPath(shimDir),
+            PORTLESS_STATE_DIR: tmpDir,
+            PORTLESS_HTTPS: "0",
+          },
+        });
+
+        expect(status).toBe(0);
+        expect(stdout).toContain("app-named-url-single");
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        fs.rmSync(shimDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -890,7 +953,7 @@ describe("CLI", () => {
 
         const { status } = run(["run", "--name", "mobile", "--app-port", "4567", "expo", "start"], {
           env: {
-            PATH: `${shimDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            PATH: prependPath(shimDir),
             PORTLESS_STATE_DIR: tmpDir,
             PORTLESS_TEST_CAPTURE_FILE: capturePath,
             PORTLESS_HTTPS: "0",
@@ -987,7 +1050,7 @@ describe("CLI", () => {
 
         const { status } = run(["run", "--name", "myapp", "--app-port", "4567", "rsbuild", "dev"], {
           env: {
-            PATH: `${shimDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            PATH: prependPath(shimDir),
             PORTLESS_STATE_DIR: tmpDir,
             PORTLESS_TEST_CAPTURE_FILE: capturePath,
             PORTLESS_HTTPS: "0",
@@ -1378,7 +1441,7 @@ describe("CLI", () => {
           PORTLESS_PORT: String(testPort),
           PORTLESS_STATE_DIR: tmpDir,
           // Put fake security first in PATH; real openssl is still reachable
-          PATH: `${fakeBinDir}:${process.env.PATH}`,
+          PATH: prependPath(fakeBinDir),
         };
 
         // HTTPS is on by default (no PORTLESS_HTTPS=0), so this exercises
