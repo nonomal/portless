@@ -1429,6 +1429,23 @@ function applySharingFlag(flag: string): boolean {
   return false;
 }
 
+function isUrlGetAliasShape(args: string[]): boolean {
+  if (args[0] !== "url") return false;
+
+  const rest = args.slice(1);
+  if (rest.length === 0) return true;
+  if (rest.includes("--help") || rest.includes("-h")) return true;
+
+  let positionals = 0;
+  for (const arg of rest) {
+    if (arg === "--no-worktree") continue;
+    if (arg.startsWith("-")) return false;
+    positionals++;
+  }
+
+  return positionals <= 1;
+}
+
 /**
  * Parse `run` subcommand arguments: `[--name <name>] [--force] [--] <command...>`
  *
@@ -3782,7 +3799,7 @@ async function main() {
       await handleList();
       return;
     }
-    if (args[0] === "get" || (args[0] === "url" && args.slice(2).every((a) => a.startsWith("-")))) {
+    if (args[0] === "get" || isUrlGetAliasShape(args)) {
       await handleGet(args);
       return;
     }

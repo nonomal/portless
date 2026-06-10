@@ -1170,6 +1170,24 @@ describe("CLI", () => {
       expect(stdout.trim()).toMatch(/^https?:\/\/backend\.localhost(:\d+)?$/);
     });
 
+    it("accepts --no-worktree before the name through the url alias", () => {
+      const { status, stdout } = run(["url", "--no-worktree", "backend"], { env: getEnv() });
+      expect(status).toBe(0);
+      expect(stdout.trim()).toMatch(/^https?:\/\/backend\.localhost(:\d+)?$/);
+    });
+
+    it("accepts --no-worktree after the name through the url alias", () => {
+      const { status, stdout } = run(["url", "backend", "--no-worktree"], { env: getEnv() });
+      expect(status).toBe(0);
+      expect(stdout.trim()).toMatch(/^https?:\/\/backend\.localhost(:\d+)?$/);
+    });
+
+    it("reports missing service name through the url alias", () => {
+      const { status, stderr } = run(["url", "--no-worktree"], { env: getEnv() });
+      expect(status).toBe(1);
+      expect(stderr).toContain("Missing service name");
+    });
+
     it("exits 1 for invalid hostname", () => {
       const { status, stderr } = run(["get", "my@app"]);
       expect(status).toBe(1);
