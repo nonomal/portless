@@ -361,7 +361,7 @@ describe("CLI", () => {
             "PORTLESS_TAILSCALE=1",
             "node",
             "-e",
-            "process.stdout.write(process.env.PORTLESS_TAILSCALE || '')",
+            "process.stdout.write(process.env.PORTLESS_TAILSCALE)",
           ],
           { env }
         );

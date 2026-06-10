@@ -756,30 +756,6 @@ function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
-/** Quote an argument for cmd.exe while preserving Windows argv parsing. */
-function cmdEscape(arg: string): string {
-  let escaped = '"';
-  let backslashes = 0;
-
-  for (const char of arg) {
-    if (char === "\\") {
-      backslashes++;
-      continue;
-    }
-
-    if (char === '"') {
-      escaped += "\\".repeat(backslashes * 2 + 1) + '"';
-      backslashes = 0;
-      continue;
-    }
-
-    escaped += "\\".repeat(backslashes) + char;
-    backslashes = 0;
-  }
-
-  return escaped + "\\".repeat(backslashes * 2) + '"';
-}
-
 /**
  * Walk up from `cwd` to the filesystem root, collecting all
  * `node_modules/.bin` directories that exist. Returns them in
@@ -850,9 +826,8 @@ export function spawnCommand(
   // On Unix, spawn detached so the child gets its own process group. This
   // lets us kill the entire tree (shell + grandchild dev server) with a
   // single process.kill(-pid, signal) instead of only the immediate child.
-  const windowsCommand = commandArgs.map(cmdEscape).join(" ");
   const child = isWindows
-    ? spawn("cmd.exe", ["/d", "/s", "/c", `"${windowsCommand}"`], {
+    ? spawn("cmd.exe", ["/d", "/s", "/c", commandArgs.join(" ")], {
         stdio: "inherit",
         env,
       })
