@@ -1,8 +1,24 @@
 # Changelog
 
-## 0.14.0
+## 0.15.0
 
 <!-- release:start -->
+
+### New Features
+
+- **`portless doctor`**: New read only diagnostics command checks Node.js, the state directory, proxy liveness, route entries, hostname resolution, HTTPS CA trust, and LAN prerequisites, then prints suggested fixes. (#337)
+
+### Bug Fixes
+
+- **HTTP/2 Host forwarding**: Proxy now forwards HTTP/2 `:authority` as `Host` to HTTP/1.1 backends, fixing apps that depend on Host and previously saw `127.0.0.1` for browser traffic. (#328)
+- **`--force` takeover cleanup**: Exit cleanup now removes only routes still owned by the exiting process, so a forced takeover does not deregister the new owner's route. (#328)
+
+### Contributors
+
+- @ctate
+<!-- release:end -->
+
+## 0.14.0
 
 ### New Features
 
@@ -15,7 +31,6 @@
 ### Contributors
 
 - @ctate
-<!-- release:end -->
 
 ## 0.13.1
 
