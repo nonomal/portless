@@ -9,7 +9,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { createSNICallback, ensureCerts, isCATrusted, trustCA, untrustCA } from "./certs.js";
 import { createHttpRedirectServer, createProxyServer } from "./proxy.js";
-import { fixOwnership, formatUrl, isErrnoException, parseHostname } from "./utils.js";
+import {
+  fixOwnership,
+  formatUrl,
+  isErrnoException,
+  isProcessAlive as isPidAlive,
+  parseHostname,
+} from "./utils.js";
 import {
   checkHostResolution,
   getManagedHostnames,
@@ -2266,12 +2272,7 @@ function printDoctorFinding(finding: DoctorFinding): void {
 
 function isProcessAliveForDoctor(pid: number): boolean {
   if (pid <= 0) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return isPidAlive(pid);
 }
 
 function checkPathWritable(targetPath: string): boolean {
@@ -2294,6 +2295,10 @@ function checkCommandAvailable(command: string, args: string[]): boolean {
 
 function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function isValidTcpPort(port: number): boolean {
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 function doctorProxyStartHint(proxyPort: number, tls: boolean): string {
@@ -2533,12 +2538,24 @@ ${colors.bold("Options:")}
   }
 
   const routePortChecks = await Promise.all(
-    liveRoutes.map(async (route) => ({
-      route,
-      listening: await isPortListening(route.port),
-    }))
+    liveRoutes.map(async (route) => {
+      const validPort = isValidTcpPort(route.port);
+      return {
+        route,
+        invalidPort: !validPort,
+        listening: validPort ? await isPortListening(route.port) : false,
+      };
+    })
   );
-  for (const { route, listening } of routePortChecks) {
+  for (const { route, invalidPort, listening } of routePortChecks) {
+    if (invalidPort) {
+      add(
+        "warn",
+        `Route ${route.hostname} has invalid port ${route.port}.`,
+        route.pid === 0 ? "Remove or recreate the alias." : "Run: portless prune"
+      );
+      continue;
+    }
     if (listening) continue;
     add(
       "warn",

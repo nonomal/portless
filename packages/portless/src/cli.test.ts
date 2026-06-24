@@ -354,6 +354,32 @@ describe("CLI", () => {
       }
     });
 
+    it("warns when a route has an invalid port instead of crashing", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-doctor-bad-port-"));
+      const proxyPort = await getFreePort();
+      try {
+        fs.writeFileSync(
+          path.join(tmpDir, "routes.json"),
+          JSON.stringify([{ hostname: "bad.localhost", port: 99999, pid: 0 }])
+        );
+
+        const { status, stdout, stderr } = run(["doctor"], {
+          env: {
+            PORTLESS_STATE_DIR: tmpDir,
+            PORTLESS_PORT: proxyPort.toString(),
+            PORTLESS_HTTPS: "0",
+          },
+        });
+
+        expect(status).toBe(0);
+        expect(stdout).toContain("Route bad.localhost has invalid port 99999.");
+        expect(stdout).toContain("Summary: 0 failures");
+        expect(stderr).not.toContain("Port should be");
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("does not report an alive stale PID file as healthy", async () => {
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-doctor-pid-"));
       const proxyPort = await getFreePort();
