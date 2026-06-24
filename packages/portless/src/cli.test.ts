@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -104,6 +104,50 @@ async function getFreePort(): Promise<number> {
   }
 }
 
+async function waitForHttpHeader(
+  port: number,
+  headerName: string,
+  expectedValue: string
+): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    const matched = await new Promise<boolean>((resolve) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          method: "HEAD",
+          timeout: 200,
+        },
+        (res) => {
+          res.resume();
+          resolve(res.headers[headerName.toLowerCase()] === expectedValue);
+        }
+      );
+      req.on("error", () => resolve(false));
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.end();
+    });
+    if (matched) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for ${headerName} on port ${port}`);
+}
+
+async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, 1000);
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+}
+
 describe("CLI", () => {
   beforeAll(() => {
     if (!fs.existsSync(CLI_PATH)) {
@@ -123,6 +167,7 @@ describe("CLI", () => {
       expect(stdout).toContain("portless run");
       expect(stdout).toContain("portless get");
       expect(stdout).toContain("run [--name <name>]");
+      expect(stdout).toContain("portless doctor");
       expect(stdout).toContain("--port");
       expect(stdout).toContain("-p");
       expect(stdout).toContain("--foreground");
@@ -174,6 +219,139 @@ describe("CLI", () => {
       // it doesn't crash and returns 0.
       const { status } = run(["list"]);
       expect(status).toBe(0);
+    });
+  });
+
+  describe("doctor", () => {
+    it("prints help with --help", () => {
+      const { status, stdout } = run(["doctor", "--help"]);
+      expect(status).toBe(0);
+      expect(stdout).toContain("portless doctor");
+      expect(stdout).toContain("state");
+      expect(stdout).toContain("does not start");
+    });
+
+    it("reports a stopped proxy as a warning and exits 0", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-doctor-stopped-"));
+      const proxyPort = await getFreePort();
+      try {
+        const { status, stdout } = run(["doctor"], {
+          env: {
+            PORTLESS_STATE_DIR: tmpDir,
+            PORTLESS_PORT: proxyPort.toString(),
+            PORTLESS_HTTPS: "0",
+          },
+        });
+
+        expect(status).toBe(0);
+        expect(stdout).toContain("portless doctor");
+        expect(stdout).toContain(`Proxy is not running on port ${proxyPort}`);
+        expect(stdout).toContain("Summary: 0 failures");
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("exits 1 when the proxy port is occupied by a non-portless process", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-doctor-conflict-"));
+      const server = http.createServer((_req, res) => {
+        res.end("not portless");
+      });
+
+      try {
+        const proxyPort = await new Promise<number>((resolve) => {
+          server.listen(0, "127.0.0.1", () => {
+            const addr = server.address();
+            if (addr && typeof addr !== "string") {
+              resolve(addr.port);
+            }
+          });
+        });
+
+        const { status, stdout } = run(["doctor"], {
+          env: {
+            PORTLESS_STATE_DIR: tmpDir,
+            PORTLESS_PORT: proxyPort.toString(),
+            PORTLESS_HTTPS: "0",
+          },
+        });
+
+        expect(status).toBe(1);
+        expect(stdout).toContain(`Port ${proxyPort} is in use, but it is not a portless proxy`);
+        expect(stdout).toContain("Summary: 1 failure");
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("reports a responding proxy and registered route", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "portless-doctor-healthy-"));
+      const appServer = http.createServer((_req, res) => {
+        res.end("app");
+      });
+      let proxyChild: ReturnType<typeof spawn> | undefined;
+
+      try {
+        const proxyPort = await getFreePort();
+        const proxyScriptPath = path.join(tmpDir, "proxy-server.cjs");
+        fs.writeFileSync(
+          proxyScriptPath,
+          [
+            'const http = require("node:http");',
+            "const server = http.createServer((_req, res) => {",
+            '  res.setHeader("X-Portless", "1");',
+            '  res.end("ok");',
+            "});",
+            `server.listen(${proxyPort}, "127.0.0.1");`,
+            'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
+          ].join("\n") + "\n"
+        );
+        proxyChild = spawn(process.execPath, [proxyScriptPath], {
+          stdio: "ignore",
+        });
+        await waitForHttpHeader(proxyPort, "X-Portless", "1");
+
+        const appPort = await new Promise<number>((resolve) => {
+          appServer.listen(0, "127.0.0.1", () => {
+            const addr = appServer.address();
+            if (addr && typeof addr !== "string") {
+              resolve(addr.port);
+            }
+          });
+        });
+
+        fs.writeFileSync(path.join(tmpDir, "proxy.port"), proxyPort.toString());
+        fs.writeFileSync(
+          path.join(tmpDir, "routes.json"),
+          JSON.stringify([{ hostname: "myapp.localhost", port: appPort, pid: 0 }])
+        );
+
+        const { status, stdout } = run(["doctor"], {
+          env: {
+            PORTLESS_STATE_DIR: tmpDir,
+            PORTLESS_HTTPS: "0",
+          },
+        });
+
+        expect(status).toBe(0);
+        expect(stdout).toContain(`Proxy is responding on port ${proxyPort}`);
+        expect(stdout).toContain("Routes: 1 active route");
+        expect(stdout).toContain("Summary: 0 failures");
+      } finally {
+        if (proxyChild) await stopChild(proxyChild);
+        await new Promise<void>((resolve) => appServer.close(() => resolve()));
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not bypass doctor when PORTLESS=0 is set", () => {
+      const { status, stderr } = run(["doctor", "typo"], {
+        env: { PORTLESS: "0" },
+      });
+      expect(status).toBe(1);
+      expect(stderr).toContain("Unknown argument");
+      expect(stderr).not.toContain("ENOENT");
     });
   });
 
