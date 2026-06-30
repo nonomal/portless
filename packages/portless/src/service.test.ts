@@ -484,6 +484,7 @@ describe("handleService", () => {
       port: currentPort,
       tls: true,
       tld: "localhost",
+      tlds: ["localhost"],
       lanMode: false,
       lanIp: null,
     });

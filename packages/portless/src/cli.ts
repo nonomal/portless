@@ -469,6 +469,10 @@ function formatUrls(hostnames: readonly string[], proxyPort: number, tls: boolea
   return hostnames.map((hostname) => formatUrl(hostname, proxyPort, tls));
 }
 
+function formatViteAllowedHosts(tlds: readonly string[]): string {
+  return tlds.map((configuredTld) => `.${configuredTld}`).join(",");
+}
+
 function addRoutes(
   store: RouteStore,
   hostnames: readonly string[],
@@ -1433,9 +1437,7 @@ async function runApp(
       PORT: port.toString(),
       ...(hostBind ? { HOST: hostBind } : {}),
       PORTLESS_URL: finalUrl,
-      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: tlds
-        .map((configuredTld) => `.${configuredTld}`)
-        .join(","),
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: formatViteAllowedHosts(tlds),
       // Note: EXPO_PACKAGER_PROXY_URL is not used — expo-dev-client removed
       // baked-in pinging, making this env var ineffective. Expo handles its
       // own LAN discovery natively.
@@ -3502,6 +3504,7 @@ async function spawnProxiedApp(
       PORT: String(appPort),
       HOST: "127.0.0.1",
       PORTLESS_URL: url,
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: formatViteAllowedHosts(tlds),
     };
 
     if (tls) {
@@ -3749,6 +3752,7 @@ async function runWithTurbo(
       PORT: String(appPort),
       HOST: "127.0.0.1",
       PORTLESS_URL: url,
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: formatViteAllowedHosts(tlds),
     };
     if (tls) {
       const caPath = path.join(stateDir, "ca.pem");

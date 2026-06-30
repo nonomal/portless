@@ -1200,6 +1200,7 @@ describe("CLI", () => {
             )}, "utf-8"));`,
             `fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({`,
             "  PORTLESS_URL: process.env.PORTLESS_URL,",
+            "  __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: process.env.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS,",
             "  routes,",
             "}));",
           ].join("\n") + "\n"
@@ -1215,10 +1216,12 @@ describe("CLI", () => {
         expect(status).toBe(0);
         const capture = JSON.parse(fs.readFileSync(capturePath, "utf-8")) as {
           PORTLESS_URL: string;
+          __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: string;
           routes: Array<{ hostname: string; port: number }>;
         };
 
         expect(capture.PORTLESS_URL).toBe(`http://myapp.localhost:${proxyPort}`);
+        expect(capture.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS).toBe(".localhost,.test");
         expect(capture.routes.map((route) => route.hostname).sort()).toEqual([
           "myapp.localhost",
           "myapp.test",
